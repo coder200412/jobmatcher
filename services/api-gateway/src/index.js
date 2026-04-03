@@ -41,6 +41,15 @@ const rateLimiter = createRateLimiter();
 app.use('/api', rateLimiter);
 
 // Health check
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'api-gateway',
+    message: 'Workvanta backend is running',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',

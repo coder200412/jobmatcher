@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+.next/
+coverage/
+.nyc_output/
+docker-data/

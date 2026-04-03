@@ -1,0 +1,31 @@
+{
+  "name": "job-matching-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Scalable Event-Driven Job Matching System",
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "frontend"
+  ],
+  "scripts": {
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "infra:reset": "docker compose down -v && docker compose up -d",
+    "db:init": "node scripts/init-db.js",
+    "dev:gateway": "npm run dev --workspace=services/api-gateway",
+    "dev:users": "npm run dev --workspace=services/user-service",
+    "dev:jobs": "npm run dev --workspace=services/job-service",
+    "dev:recommendations": "npm run dev --workspace=services/recommendation-service",
+    "dev:notifications": "npm run dev --workspace=services/notification-service",
+    "dev:analytics": "npm run dev --workspace=services/analytics-service",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "dev:services": "npm run db:init && concurrently \"npm run dev:gateway\" \"npm run dev:users\" \"npm run dev:jobs\" \"npm run dev:recommendations\" \"npm run dev:notifications\" \"npm run dev:analytics\"",
+    "dev:all": "concurrently \"npm run dev:services\" \"npm run dev:frontend\"",
+    "seed": "npm run db:init && node scripts/seed-data.js",
+    "build:shared": "npm run build --workspace=packages/shared"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

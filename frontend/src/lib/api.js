@@ -1,4 +1,18 @@
-const API_BASE = typeof window !== 'undefined' ? '/api' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000/api');
+function stripTrailingSlash(value) {
+  return (value || '').replace(/\/+$/, '');
+}
+
+function normalizeApiBase(value) {
+  const trimmed = stripTrailingSlash(value);
+
+  if (!trimmed) {
+    return '/api';
+  }
+
+  return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+}
+
+const API_BASE = normalizeApiBase(process.env.NEXT_PUBLIC_API_URL);
 
 const AUTH_PATHS_WITHOUT_REFRESH = [
   '/auth/login',

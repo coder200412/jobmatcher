@@ -143,11 +143,14 @@ function buildVerificationUrl(email, token) {
     process.env.PUBLIC_API_URL ||
     process.env.NEXT_PUBLIC_API_URL ||
     'http://localhost:3000/api';
+  const normalizedApiUrl = apiUrl.replace(/\/+$/, '').endsWith('/api')
+    ? apiUrl.replace(/\/+$/, '')
+    : `${apiUrl.replace(/\/+$/, '')}/api`;
   const qs = new URLSearchParams({
     email,
     token,
   });
-  return `${apiUrl}/auth/verify-email?${qs.toString()}`;
+  return `${normalizedApiUrl}/auth/verify-email?${qs.toString()}`;
 }
 
 function renderVerificationEmail(firstName, confirmationUrl) {

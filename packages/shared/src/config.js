@@ -24,6 +24,25 @@ function isTruthy(value, defaultValue = false) {
   return !['0', 'false', 'no', 'off', 'disable'].includes(String(value).toLowerCase());
 }
 
+function shouldUseSsl(connectionString) {
+  if (isTruthy(process.env.POSTGRES_SSL || process.env.PGSSLMODE, false)) {
+    return true;
+  }
+
+  if (!connectionString) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(connectionString);
+    const sslMode = (parsed.searchParams.get('sslmode') || '').toLowerCase();
+    const sslValue = (parsed.searchParams.get('ssl') || '').toLowerCase();
+    return ['require', 'verify-ca', 'verify-full', 'prefer'].includes(sslMode) || ['1', 'true'].includes(sslValue);
+  } catch {
+    return false;
+  }
+}
+
 function createPgConfig(overrides = {}) {
   const connectionString =
     process.env.DATABASE_URL ||
@@ -41,7 +60,7 @@ function createPgConfig(overrides = {}) {
         password: process.env.POSTGRES_PASSWORD || 'jobmatch_secret_2024',
       };
 
-  if (isTruthy(process.env.POSTGRES_SSL || process.env.PGSSLMODE, false)) {
+  if (shouldUseSsl(connectionString)) {
     baseConfig.ssl = { rejectUnauthorized: false };
   }
 

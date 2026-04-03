@@ -1,7 +1,63 @@
+const path = require('path');
 const { spawn } = require('child_process');
 
 function valueOrDefault(value, fallback) {
   return String(value || fallback);
+}
+
+function resolveServiceDir(...segments) {
+  return path.resolve(__dirname, '..', ...segments);
+}
+
+function prefixAndWrite(stream, prefix, chunk) {
+  const text = chunk.toString();
+  const lines = text.split(/\r?\n/);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const isLastEmpty = index === lines.length - 1 && line === '';
+
+    if (!isLastEmpty) {
+      stream.write(`[${prefix}] ${line}\n`);
+    }
+  }
+}
+
+function runNodeScript({ name, cwd, scriptPath, env = {}, tolerateFailure = false }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [scriptPath], {
+      cwd,
+      env: {
+        ...process.env,
+        ...env,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    child.stdout.on('data', (chunk) => prefixAndWrite(process.stdout, name, chunk));
+    child.stderr.on('data', (chunk) => prefixAndWrite(process.stderr, name, chunk));
+
+    child.on('error', (error) => {
+      reject(new Error(`${name} failed to start: ${error.message}`));
+    });
+
+    child.on('exit', (code, signal) => {
+      if (!code) {
+        resolve(null);
+        return;
+      }
+
+      const detail = `${name} exited${code !== null ? ` with code ${code}` : ''}${signal ? ` (${signal})` : ''}`;
+
+      if (tolerateFailure) {
+        console.warn(`[backend] ${detail}`);
+        resolve(null);
+        return;
+      }
+
+      reject(new Error(detail));
+    });
+  });
 }
 
 const servicePorts = {
@@ -24,7 +80,8 @@ const sharedGatewayEnv = {
 const services = [
   {
     name: 'gateway',
-    command: ['npm', 'run', 'start', '--workspace=services/api-gateway'],
+    cwd: resolveServiceDir('services', 'api-gateway'),
+    scriptPath: path.join('src', 'index.js'),
     env: {
       PORT: servicePorts.gateway,
       API_GATEWAY_PORT: servicePorts.gateway,
@@ -33,7 +90,8 @@ const services = [
   },
   {
     name: 'users',
-    command: ['npm', 'run', 'start', '--workspace=services/user-service'],
+    cwd: resolveServiceDir('services', 'user-service'),
+    scriptPath: path.join('src', 'index.js'),
     env: {
       PORT: servicePorts.users,
       USER_SERVICE_PORT: servicePorts.users,
@@ -41,7 +99,8 @@ const services = [
   },
   {
     name: 'jobs',
-    command: ['npm', 'run', 'start', '--workspace=services/job-service'],
+    cwd: resolveServiceDir('services', 'job-service'),
+    scriptPath: path.join('src', 'index.js'),
     env: {
       PORT: servicePorts.jobs,
       JOB_SERVICE_PORT: servicePorts.jobs,
@@ -49,7 +108,8 @@ const services = [
   },
   {
     name: 'recommendations',
-    command: ['npm', 'run', 'start', '--workspace=services/recommendation-service'],
+    cwd: resolveServiceDir('services', 'recommendation-service'),
+    scriptPath: path.join('src', 'index.js'),
     env: {
       PORT: servicePorts.recommendations,
       RECOMMENDATION_SERVICE_PORT: servicePorts.recommendations,
@@ -57,7 +117,8 @@ const services = [
   },
   {
     name: 'notifications',
-    command: ['npm', 'run', 'start', '--workspace=services/notification-service'],
+    cwd: resolveServiceDir('services', 'notification-service'),
+    scriptPath: path.join('src', 'index.js'),
     env: {
       PORT: servicePorts.notifications,
       NOTIFICATION_SERVICE_PORT: servicePorts.notifications,
@@ -65,7 +126,8 @@ const services = [
   },
   {
     name: 'analytics',
-    command: ['npm', 'run', 'start', '--workspace=services/analytics-service'],
+    cwd: resolveServiceDir('services', 'analytics-service'),
+    scriptPath: path.join('src', 'index.js'),
     env: {
       PORT: servicePorts.analytics,
       ANALYTICS_SERVICE_PORT: servicePorts.analytics,
@@ -75,6 +137,40 @@ const services = [
 
 const children = new Map();
 let shuttingDown = false;
+
+function spawnService(service) {
+  const child = spawn(process.execPath, [service.scriptPath], {
+    cwd: service.cwd,
+    env: {
+      ...process.env,
+      ...service.env,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  child.stdout.on('data', (chunk) => prefixAndWrite(process.stdout, service.name, chunk));
+  child.stderr.on('data', (chunk) => prefixAndWrite(process.stderr, service.name, chunk));
+
+  child.on('error', (error) => {
+    console.error(`[backend] Failed to start ${service.name}: ${error.message}`);
+    stopAll(1);
+  });
+
+  child.on('exit', (code, signal) => {
+    if (shuttingDown) return;
+
+    if (signal || code) {
+      console.error(`[backend] ${service.name} exited unexpectedly${code !== null ? ` with code ${code}` : ''}${signal ? ` (${signal})` : ''}`);
+      stopAll(code || 1);
+      return;
+    }
+
+    console.log(`[backend] ${service.name} exited cleanly`);
+    stopAll(0);
+  });
+
+  children.set(service.name, child);
+}
 
 function stopAll(exitCode = 0) {
   if (shuttingDown) return;
@@ -91,36 +187,24 @@ function stopAll(exitCode = 0) {
   }, 500);
 }
 
-for (const service of services) {
-  const child = spawn(service.command[0], service.command.slice(1), {
-    cwd: process.cwd(),
-    stdio: 'inherit',
-    shell: true,
-    env: {
-      ...process.env,
-      ...service.env,
-    },
-  });
+async function main() {
+  try {
+    await runNodeScript({
+      name: 'db:init',
+      cwd: resolveServiceDir(),
+      scriptPath: path.resolve(__dirname, 'init-db.js'),
+    });
 
-  children.set(service.name, child);
-
-  child.on('exit', (code, signal) => {
-    if (shuttingDown) return;
-
-    if (signal || code) {
-      console.error(`[backend] ${service.name} exited unexpectedly${code !== null ? ` with code ${code}` : ''}${signal ? ` (${signal})` : ''}`);
-      stopAll(code || 1);
-      return;
+    for (const service of services) {
+      spawnService(service);
     }
-
-    console.log(`[backend] ${service.name} exited cleanly`);
-  });
-
-  child.on('error', (error) => {
-    console.error(`[backend] Failed to start ${service.name}: ${error.message}`);
-    stopAll(1);
-  });
+  } catch (error) {
+    console.error(`[backend] ${error.message}`);
+    process.exit(1);
+  }
 }
 
 process.on('SIGINT', () => stopAll(0));
 process.on('SIGTERM', () => stopAll(0));
+
+main();

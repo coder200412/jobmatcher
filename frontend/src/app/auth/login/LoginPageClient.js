@@ -43,7 +43,7 @@ export default function LoginPageClient() {
     <div className="auth-page">
       <div className="auth-card" id="login-card">
         <Link href="/" className="navbar-logo" style={{ display: 'block', textAlign: 'center', marginBottom: 'var(--space-lg)', fontSize: '1.6rem' }}>
-          ⚡ Joblume
+          ⚡ Workvanta
         </Link>
         <h1 style={{ fontSize: '1.6rem' }}>Welcome Back</h1>
         <p className="auth-subtitle">Sign in to continue to your dashboard</p>

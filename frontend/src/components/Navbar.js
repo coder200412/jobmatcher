@@ -22,7 +22,7 @@ export default function Navbar() {
     <nav className="navbar" id="main-navbar">
       <div className="navbar-inner">
         <Link href="/" className="navbar-logo">
-          ⚡ Joblume
+          ⚡ Workvanta
         </Link>
 
         <div className="navbar-links" id="nav-links">

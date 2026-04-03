@@ -54,6 +54,41 @@ async function createSmtpTransport() {
   };
 }
 
+async function createResendTransport() {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM || process.env.SMTP_FROM;
+
+  if (!apiKey || !from) {
+    return null;
+  }
+
+  return {
+    type: 'resend-api',
+    from,
+    sendMail: async ({ to, subject, html, text }) => {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from,
+          to: [to],
+          subject,
+          html,
+          text,
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Resend API error (${response.status}): ${body}`);
+      }
+    },
+  };
+}
+
 async function createGmailAppPasswordTransport() {
   const user = process.env.GMAIL_USER;
   // Google often displays app passwords grouped with spaces, so normalize that input.
@@ -116,6 +151,7 @@ async function getTransporterConfig() {
   if (!transporterConfigPromise) {
     transporterConfigPromise = (async () => {
       const config =
+        await createResendTransport() ||
         await createSmtpTransport() ||
         await createGmailAppPasswordTransport() ||
         await createGmailOAuthTransport();
@@ -176,9 +212,9 @@ function renderVerificationEmail(firstName, confirmationUrl) {
   <body>
     <div class="container">
       <div class="card">
-        <div class="logo">JobMatch</div>
+        <div class="logo">Workvanta</div>
         <h2>Confirm Your New Account</h2>
-        <p class="subtitle">Hi ${firstName || 'there'}, welcome to JobMatch! Click the button below to confirm your email and activate your account.</p>
+        <p class="subtitle">Hi ${firstName || 'there'}, welcome to Workvanta! Click the button below to confirm your email and activate your account.</p>
         <div class="button-wrap">
           <a class="button" href="${confirmationUrl}">Confirm Email</a>
         </div>
@@ -186,7 +222,7 @@ function renderVerificationEmail(firstName, confirmationUrl) {
         <p class="link">${confirmationUrl}</p>
       </div>
       <div class="footer">
-        JobMatch — Intelligent Job Matching Platform
+        Workvanta — Intelligent Job Matching Platform
       </div>
     </div>
   </body>
@@ -208,7 +244,7 @@ function logFallbackLink(toEmail, firstName, confirmationUrl, errorMessage) {
 async function sendVerificationEmail(toEmail, firstName, confirmationUrl) {
   const config = await getTransporterConfig();
   const htmlContent = renderVerificationEmail(firstName, confirmationUrl);
-  const textContent = `Hi ${firstName || 'there'}, confirm your JobMatch account by opening this link: ${confirmationUrl}. This link expires in 10 minutes.`;
+  const textContent = `Hi ${firstName || 'there'}, confirm your Workvanta account by opening this link: ${confirmationUrl}. This link expires in 10 minutes.`;
 
   if (!config) {
     logFallbackLink(toEmail, firstName, confirmationUrl, 'Email transport not configured');
@@ -220,13 +256,22 @@ async function sendVerificationEmail(toEmail, firstName, confirmationUrl) {
   }
 
   try {
-    await config.transporter.sendMail({
-      from: config.from,
-      to: toEmail,
-      subject: 'Confirm your new JobMatch account',
-      html: htmlContent,
-      text: textContent,
-    });
+    if (config.transporter) {
+      await config.transporter.sendMail({
+        from: config.from,
+        to: toEmail,
+        subject: 'Confirm your new Workvanta account',
+        html: htmlContent,
+        text: textContent,
+      });
+    } else {
+      await config.sendMail({
+        to: toEmail,
+        subject: 'Confirm your new Workvanta account',
+        html: htmlContent,
+        text: textContent,
+      });
+    }
 
     console.log(`📧 Confirmation email sent to ${toEmail} via ${config.type}`);
     return {

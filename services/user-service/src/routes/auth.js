@@ -42,7 +42,24 @@ function getVerificationMessage(email, delivery) {
     return `Confirmation email sent to ${email}. Open it and click the confirm button to activate your account.`;
   }
 
-  return 'Email delivery is not configured yet, so the confirmation link was logged in the user-service console for local development. Configure SMTP or Gmail credentials for real inbox delivery.';
+  if (delivery.transport === 'console') {
+    return 'Email delivery is not configured yet, so the confirmation link was logged in the user-service console for local development. Configure SMTP or Gmail credentials for real inbox delivery.';
+  }
+
+  const errorMessage = (delivery.error || '').toLowerCase();
+  const looksLikeNetworkBlock =
+    errorMessage.includes('timeout') ||
+    errorMessage.includes('timed out') ||
+    errorMessage.includes('econnrefused') ||
+    errorMessage.includes('ehostunreach') ||
+    errorMessage.includes('enetunreach') ||
+    errorMessage.includes('esocket');
+
+  if (looksLikeNetworkBlock) {
+    return 'Email sending is configured, but the server could not reach the mail provider. On Render this usually means outbound SMTP is blocked on the current instance type. Use an email API provider such as Resend, Brevo, or SendGrid, or switch to an instance type that allows SMTP traffic.';
+  }
+
+  return 'Email sending is configured, but the confirmation email could not be delivered from the server. Check the user-service deployment logs for the exact SMTP error and verify the Gmail or SMTP credentials.';
 }
 
 function buildLoginRedirect(email, verified, message) {

@@ -86,7 +86,7 @@ export default function Home() {
       {/* Features */}
       <section className="section container" id="features">
         <div className="section-header" style={{ justifyContent: 'center', textAlign: 'center', flexDirection: 'column' }}>
-          <h2>Why <span className="gradient-text">JobMatch</span>?</h2>
+          <h2>Why <span className="gradient-text">Joblume</span>?</h2>
           <p style={{ color: 'var(--text-secondary)', marginTop: 'var(--space-sm)', maxWidth: '600px' }}>
             Enterprise-grade architecture powering intelligent job recommendations at scale.
           </p>
@@ -156,7 +156,7 @@ export default function Home() {
         fontSize: '0.85rem',
       }}>
         <div className="container">
-          <p>⚡ JobMatch — Scalable Event-Driven Job Matching System</p>
+          <p>⚡ Joblume — Scalable Event-Driven Job Matching System</p>
           <p style={{ marginTop: 'var(--space-xs)' }}>
             Built with Node.js · Kafka · Elasticsearch · Redis · PostgreSQL · Next.js
           </p>

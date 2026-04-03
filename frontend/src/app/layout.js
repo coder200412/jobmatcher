@@ -3,8 +3,8 @@ import { AuthProvider } from '@/lib/auth-context';
 import Navbar from '@/components/Navbar';
 
 export const metadata = {
-  title: "JobMatch — Intelligent Job Matching Platform",
-  description: "Find your perfect career match with AI-powered job recommendations. JobMatch connects talented candidates with top employers using intelligent matching algorithms.",
+  title: "Joblume — Intelligent Job Matching Platform",
+  description: "Find your perfect career match with AI-powered job recommendations. Joblume connects talented candidates with top employers using intelligent matching algorithms.",
   keywords: "jobs, career, recruitment, AI matching, job search",
 };
 

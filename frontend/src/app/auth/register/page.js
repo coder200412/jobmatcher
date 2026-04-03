@@ -44,7 +44,7 @@ export default function RegisterPage() {
     <div className="auth-page">
       <div className="auth-card" id="register-card">
         <Link href="/" className="navbar-logo" style={{ display: 'block', textAlign: 'center', marginBottom: 'var(--space-lg)', fontSize: '1.6rem' }}>
-          ⚡ JobMatch
+          ⚡ Joblume
         </Link>
 
         {step === 'register' ? (

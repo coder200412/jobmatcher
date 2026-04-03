@@ -8,9 +8,10 @@ const applicationRoutes = require('./routes/applications');
 const { connectDB } = require('./db');
 const { connectKafkaProducer } = require('./kafka');
 const { initElasticsearch } = require('./elasticsearch');
+const { resolvePort } = require('@jobmatch/shared');
 
 const app = express();
-const PORT = process.env.JOB_SERVICE_PORT || 3002;
+const PORT = resolvePort('JOB_SERVICE_PORT', 3002);
 
 app.use(helmet());
 app.use(cors());
@@ -38,8 +39,10 @@ async function start() {
   try {
     await connectDB();
     console.log('✅ PostgreSQL connected');
-    await connectKafkaProducer();
-    console.log('✅ Kafka producer connected');
+    const kafkaConnected = await connectKafkaProducer();
+    if (kafkaConnected) {
+      console.log('✅ Kafka producer connected');
+    }
     await initElasticsearch();
     console.log('✅ Elasticsearch connected');
     app.listen(PORT, () => {

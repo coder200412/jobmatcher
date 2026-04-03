@@ -1,26 +1,37 @@
-const { Kafka, logLevel } = require('kafkajs');
+const { Kafka, Partitioners, logLevel } = require('kafkajs');
+const { getKafkaBrokers, isKafkaEnabled } = require('@jobmatch/shared');
 
-const kafka = new Kafka({
+const kafkaEnabled = isKafkaEnabled();
+const kafka = kafkaEnabled ? new Kafka({
   clientId: 'user-service',
-  brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(','),
+  brokers: getKafkaBrokers(),
   retry: { initialRetryTime: 300, retries: 2 },
   connectionTimeout: 3000,
-  logLevel: logLevel.WARN,
-});
+  logLevel: logLevel.ERROR,
+}) : null;
 
-const producer = kafka.producer();
+const producer = kafkaEnabled ? kafka.producer({
+  createPartitioner: Partitioners.LegacyPartitioner,
+}) : null;
 let isConnected = false;
 
 async function connectKafkaProducer() {
+  if (!kafkaEnabled || !producer) {
+    console.log('ℹ️  Kafka disabled, user events will stay local');
+    return false;
+  }
+
   try {
     await Promise.race([
       producer.connect(),
       new Promise((_, reject) => setTimeout(() => reject(new Error('Kafka connection timeout')), 5000)),
     ]);
     isConnected = true;
+    return true;
   } catch (err) {
     console.warn('⚠️  Kafka not available, events will be logged to console');
     isConnected = false;
+    return false;
   }
 }
 
@@ -41,4 +52,3 @@ async function publishEvent(topic, event) {
 }
 
 module.exports = { kafka, producer, connectKafkaProducer, publishEvent };
-

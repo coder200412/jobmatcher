@@ -8,19 +8,27 @@ function createRateLimiter(maxRequests = 100, windowMs = 60000) {
   let redis = null;
   let useRedis = false;
   const inMemoryStore = new Map();
+  const redisUrl = process.env.REDIS_URL || process.env.KEY_VALUE_URL || process.env.KEY_VALUE_REDIS_URL;
 
   // Try Redis connection
   try {
-    redis = new Redis({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: parseInt(process.env.REDIS_PORT || '6379'),
+    const redisOptions = {
       maxRetriesPerRequest: 1,
       lazyConnect: true,
       retryStrategy(times) {
         if (times > 2) return null;
         return Math.min(times * 200, 1000);
       },
-    });
+    };
+
+    redis = redisUrl
+      ? new Redis(redisUrl, redisOptions)
+      : new Redis({
+          host: process.env.REDIS_HOST || 'localhost',
+          port: parseInt(process.env.REDIS_PORT || '6379', 10),
+          ...redisOptions,
+        });
+
     redis.on('error', () => {}); // Suppress connection errors
     redis.connect().then(() => {
       useRedis = true;

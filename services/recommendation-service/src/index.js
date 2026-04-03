@@ -7,9 +7,10 @@ const { connectDB } = require('./db');
 const { connectRedis } = require('./cache');
 const { startConsumer } = require('./consumer');
 const recommendationRoutes = require('./routes/recommendations');
+const { resolvePort } = require('@jobmatch/shared');
 
 const app = express();
-const PORT = process.env.RECOMMENDATION_SERVICE_PORT || 3003;
+const PORT = resolvePort('RECOMMENDATION_SERVICE_PORT', 3003);
 
 app.use(helmet());
 app.use(cors());
@@ -34,9 +35,9 @@ async function start() {
     await connectRedis();
     console.log('✅ Redis connected');
     const consumerStarted = await startConsumer();
-    if (consumerStarted) {
+    if (consumerStarted === true) {
       console.log('✅ Kafka consumer started');
-    } else {
+    } else if (consumerStarted === false) {
       console.log('⚠️  Kafka consumer retry scheduled');
     }
     app.listen(PORT, () => {

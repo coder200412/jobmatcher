@@ -3,15 +3,17 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const { resolvePort, resolveServiceUrl, stripTrailingSlash } = require('@jobmatch/shared');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const { createRateLimiter } = require('./rate-limiter');
 
 const app = express();
-const PORT = process.env.API_GATEWAY_PORT || 3000;
-
-function stripTrailingSlash(url) {
-  return (url || '').replace(/\/+$/, '');
-}
+const PORT = resolvePort('API_GATEWAY_PORT', 3000);
+const userServiceUrl = resolveServiceUrl('USER_SERVICE_URL', 'USER_SERVICE_PORT', 3001);
+const jobServiceUrl = resolveServiceUrl('JOB_SERVICE_URL', 'JOB_SERVICE_PORT', 3002);
+const recommendationServiceUrl = resolveServiceUrl('RECOMMENDATION_SERVICE_URL', 'RECOMMENDATION_SERVICE_PORT', 3003);
+const notificationServiceUrl = resolveServiceUrl('NOTIFICATION_SERVICE_URL', 'NOTIFICATION_SERVICE_PORT', 3004);
+const analyticsServiceUrl = resolveServiceUrl('ANALYTICS_SERVICE_URL', 'ANALYTICS_SERVICE_PORT', 3005);
 
 const allowedOrigins = Array.from(new Set([
   'http://localhost:3006',
@@ -45,11 +47,11 @@ app.get('/health', (req, res) => {
     service: 'api-gateway',
     timestamp: new Date().toISOString(),
     upstreamServices: {
-      userService: `http://localhost:${process.env.USER_SERVICE_PORT || 3001}`,
-      jobService: `http://localhost:${process.env.JOB_SERVICE_PORT || 3002}`,
-      recommendationService: `http://localhost:${process.env.RECOMMENDATION_SERVICE_PORT || 3003}`,
-      notificationService: `http://localhost:${process.env.NOTIFICATION_SERVICE_PORT || 3004}`,
-      analyticsService: `http://localhost:${process.env.ANALYTICS_SERVICE_PORT || 3005}`,
+      userService: userServiceUrl,
+      jobService: jobServiceUrl,
+      recommendationService: recommendationServiceUrl,
+      notificationService: notificationServiceUrl,
+      analyticsService: analyticsServiceUrl,
     },
   });
 });
@@ -66,23 +68,23 @@ function createServiceProxy(target, basePath) {
 }
 
 // User Service
-app.use('/api/auth', createServiceProxy(`http://localhost:${process.env.USER_SERVICE_PORT || 3001}`, '/api/auth'));
+app.use('/api/auth', createServiceProxy(userServiceUrl, '/api/auth'));
 
-app.use('/api/users', createServiceProxy(`http://localhost:${process.env.USER_SERVICE_PORT || 3001}`, '/api/users'));
+app.use('/api/users', createServiceProxy(userServiceUrl, '/api/users'));
 
 // Job Service
-app.use('/api/jobs', createServiceProxy(`http://localhost:${process.env.JOB_SERVICE_PORT || 3002}`, '/api/jobs'));
+app.use('/api/jobs', createServiceProxy(jobServiceUrl, '/api/jobs'));
 
-app.use('/api/applications', createServiceProxy(`http://localhost:${process.env.JOB_SERVICE_PORT || 3002}`, '/api/applications'));
+app.use('/api/applications', createServiceProxy(jobServiceUrl, '/api/applications'));
 
 // Recommendation Service
-app.use('/api/recommendations', createServiceProxy(`http://localhost:${process.env.RECOMMENDATION_SERVICE_PORT || 3003}`, '/api/recommendations'));
+app.use('/api/recommendations', createServiceProxy(recommendationServiceUrl, '/api/recommendations'));
 
 // Notification Service
-app.use('/api/notifications', createServiceProxy(`http://localhost:${process.env.NOTIFICATION_SERVICE_PORT || 3004}`, '/api/notifications'));
+app.use('/api/notifications', createServiceProxy(notificationServiceUrl, '/api/notifications'));
 
 // Analytics Service
-app.use('/api/analytics', createServiceProxy(`http://localhost:${process.env.ANALYTICS_SERVICE_PORT || 3005}`, '/api/analytics'));
+app.use('/api/analytics', createServiceProxy(analyticsServiceUrl, '/api/analytics'));
 
 function proxyErrorHandler(err, req, res) {
   console.error(`[GATEWAY] Proxy error: ${err.message}`);

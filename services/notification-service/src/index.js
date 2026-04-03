@@ -6,9 +6,10 @@ const morgan = require('morgan');
 const { connectDB } = require('./db');
 const { startConsumer } = require('./consumer');
 const notificationRoutes = require('./routes/notifications');
+const { resolvePort } = require('@jobmatch/shared');
 
 const app = express();
-const PORT = process.env.NOTIFICATION_SERVICE_PORT || 3004;
+const PORT = resolvePort('NOTIFICATION_SERVICE_PORT', 3004);
 
 app.use(helmet());
 app.use(cors());
@@ -31,7 +32,7 @@ async function start() {
     await connectDB();
     console.log('✅ PostgreSQL connected');
     const consumerStarted = await startConsumer();
-    if (!consumerStarted) {
+    if (consumerStarted === false) {
       console.log('⚠️  Kafka consumer retry scheduled');
     }
     app.listen(PORT, () => {

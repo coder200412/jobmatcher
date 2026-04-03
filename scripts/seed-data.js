@@ -1,14 +1,9 @@
 require('dotenv').config();
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
+const { createPgConfig } = require('@jobmatch/shared');
 
-const pool = new Pool({
-  host: process.env.POSTGRES_HOST || 'localhost',
-  port: parseInt(process.env.POSTGRES_PORT || '5432'),
-  database: process.env.POSTGRES_DB || 'jobmatch',
-  user: process.env.POSTGRES_USER || 'jobmatch',
-  password: process.env.POSTGRES_PASSWORD || 'jobmatch_secret_2024',
-});
+const pool = new Pool(createPgConfig());
 
 const CANDIDATES = [
   { email: 'alice@demo.com', firstName: 'Alice', lastName: 'Johnson', headline: 'Senior Full-Stack Developer', location: 'San Francisco, CA', experienceYears: 7, skills: [['React', 'expert'], ['Node.js', 'expert'], ['TypeScript', 'expert'], ['PostgreSQL', 'intermediate'], ['Docker', 'intermediate'], ['AWS', 'intermediate']] },

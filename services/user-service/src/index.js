@@ -7,9 +7,10 @@ const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const { connectDB } = require('./db');
 const { connectKafkaProducer } = require('./kafka');
+const { resolvePort } = require('@jobmatch/shared');
 
 const app = express();
-const PORT = process.env.USER_SERVICE_PORT || 3001;
+const PORT = resolvePort('USER_SERVICE_PORT', 3001);
 
 // Middleware
 app.use(helmet());
@@ -39,8 +40,10 @@ async function start() {
   try {
     await connectDB();
     console.log('✅ PostgreSQL connected');
-    await connectKafkaProducer();
-    console.log('✅ Kafka producer connected');
+    const kafkaConnected = await connectKafkaProducer();
+    if (kafkaConnected) {
+      console.log('✅ Kafka producer connected');
+    }
     app.listen(PORT, () => {
       console.log(`🚀 User Service running on port ${PORT}`);
     });

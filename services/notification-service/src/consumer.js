@@ -1,10 +1,11 @@
 const { Kafka, logLevel } = require('kafkajs');
-const { KafkaTopics, EventTypes } = require('@jobmatch/shared');
+const { KafkaTopics, EventTypes, getKafkaBrokers, isKafkaEnabled } = require('@jobmatch/shared');
 const { query } = require('./db');
 
 let consumer = null;
 let retryTimer = null;
 let kafkaAvailable = false;
+const kafkaEnabled = isKafkaEnabled();
 
 async function createNotification(userId, type, title, message, data = {}) {
   await query(
@@ -41,9 +42,13 @@ async function disconnectConsumer() {
 }
 
 async function runConsumer() {
+  if (!kafkaEnabled) {
+    return false;
+  }
+
   const kafka = new Kafka({
     clientId: 'notification-service',
-    brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(','),
+    brokers: getKafkaBrokers(),
     retry: { initialRetryTime: 500, retries: 1 },
     connectionTimeout: 3000,
     logLevel: logLevel.ERROR,
@@ -123,6 +128,11 @@ async function runConsumer() {
 }
 
 async function startConsumer() {
+  if (!kafkaEnabled) {
+    console.log('ℹ️  Kafka disabled, notification consumer will stay idle');
+    return null;
+  }
+
   if (kafkaAvailable) {
     return true;
   }

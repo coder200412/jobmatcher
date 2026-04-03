@@ -5,16 +5,24 @@ let isConnected = false;
 
 async function connectRedis() {
   try {
-    redis = new Redis({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: parseInt(process.env.REDIS_PORT || '6379'),
+    const redisUrl = process.env.REDIS_URL || process.env.KEY_VALUE_URL || process.env.KEY_VALUE_REDIS_URL;
+    const redisOptions = {
       maxRetriesPerRequest: 1,
       lazyConnect: true,
       retryStrategy(times) {
         if (times > 2) return null; // Stop retrying
         return Math.min(times * 200, 1000);
       },
-    });
+    };
+
+    redis = redisUrl
+      ? new Redis(redisUrl, redisOptions)
+      : new Redis({
+          host: process.env.REDIS_HOST || 'localhost',
+          port: parseInt(process.env.REDIS_PORT || '6379', 10),
+          ...redisOptions,
+        });
+
     // Prevent unhandled error crashes
     redis.on('error', (err) => {
       if (isConnected) {

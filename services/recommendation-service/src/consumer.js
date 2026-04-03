@@ -1,14 +1,15 @@
 const { Kafka, logLevel } = require('kafkajs');
-const { KafkaTopics, EventTypes } = require('@jobmatch/shared');
+const { KafkaTopics, EventTypes, getKafkaBrokers, isKafkaEnabled } = require('@jobmatch/shared');
 const { invalidateCache } = require('./cache');
 
-const kafka = new Kafka({
+const kafkaEnabled = isKafkaEnabled();
+const kafka = kafkaEnabled ? new Kafka({
   clientId: 'recommendation-service',
-  brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(','),
+  brokers: getKafkaBrokers(),
   retry: { initialRetryTime: 300, retries: 2 },
   connectionTimeout: 3000,
-  logLevel: logLevel.WARN,
-});
+  logLevel: logLevel.ERROR,
+}) : null;
 
 let consumer = null;
 let kafkaAvailable = false;
@@ -41,6 +42,11 @@ async function disconnectConsumer() {
 
 async function startConsumer() {
   try {
+    if (!kafkaEnabled || !kafka) {
+      console.log('ℹ️  Kafka disabled, recommendation consumer will stay idle');
+      return null;
+    }
+
     if (kafkaAvailable) {
       return true;
     }

@@ -22,6 +22,7 @@
     "dev:analytics": "npm run dev --workspace=services/analytics-service",
     "dev:frontend": "npm run dev --workspace=frontend",
     "start:gateway": "npm run start --workspace=services/api-gateway",
+    "start:backend": "node scripts/start-backend.js",
     "start:users": "npm run start --workspace=services/user-service",
     "start:jobs": "npm run start --workspace=services/job-service",
     "start:recommendations": "npm run start --workspace=services/recommendation-service",

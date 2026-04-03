@@ -2,6 +2,8 @@
 
 Deploy each service as a separate Render web service.
 
+If you want a single backend deployment instead, you can deploy one Render web service that runs the gateway plus all backend microservices inside the same instance.
+
 ## Required services
 
 - Frontend
@@ -47,6 +49,41 @@ NOTIFICATION_SERVICE_URL=https://your-notification-service.onrender.com
 ANALYTICS_SERVICE_URL=https://your-analytics-service.onrender.com
 REDIS_URL=<optional-render-redis-url>
 ```
+
+## Single Backend Service
+
+If you want the whole backend in one Render service, use:
+
+Build command:
+
+```bash
+npm install
+```
+
+Start command:
+
+```bash
+npm run start:backend
+```
+
+Set these environment variables on that one Render backend service:
+
+```env
+DATABASE_URL=<your-render-postgres-connection-string>
+KAFKA_ENABLED=false
+KAFKA_BROKERS=
+JWT_SECRET=<same-shared-secret>
+JWT_REFRESH_SECRET=<same-shared-refresh-secret>
+FRONTEND_URL=https://your-frontend.onrender.com
+PUBLIC_FRONTEND_URL=https://your-frontend.onrender.com
+PUBLIC_API_URL=https://your-api-gateway.onrender.com
+GMAIL_USER=<your-sender-email>
+GMAIL_APP_PASSWORD=<your-app-password>
+REDIS_URL=<optional-render-redis-url>
+ELASTICSEARCH_URL=<optional-render-elasticsearch-url>
+```
+
+Render will provide `PORT` automatically. The gateway listens on that public port, and the internal backend services run on local ports inside the same instance.
 
 ## Frontend
 

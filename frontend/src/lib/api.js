@@ -220,6 +220,7 @@ class ApiClient {
   markAllNotificationsRead() { return this.request('/notifications/read-all', { method: 'PUT' }); }
 
   // Analytics
+  getPlatformOverview() { return this.request('/analytics/platform-overview', { skipAuthRefresh: true }); }
   getJobAnalytics(jobId) { return this.request(`/analytics/jobs/${jobId}`); }
   getRecruiterDashboard() { return this.request('/analytics/recruiter/dashboard'); }
   getRecruiterTrustScore(recruiterId) { return this.request(`/analytics/recruiters/${recruiterId}/trust-score`, { skipAuthRefresh: true }); }

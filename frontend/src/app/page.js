@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
-import { useState } from 'react';
+import api from '@/lib/api';
+import { useEffect, useState } from 'react';
 
 const FEATURES = [
   { icon: '🔍', title: 'Smart Search', desc: 'Full-text search across millions of jobs with filters for salary, experience, location, and skills.' },
@@ -13,21 +14,56 @@ const FEATURES = [
   { icon: '🚀', title: 'Scalable', desc: 'Microservices architecture with Redis caching, rate limiting, and distributed processing.' },
 ];
 
-const STATS = [
-  { value: '10K+', label: 'Active Jobs' },
-  { value: '50K+', label: 'Candidates' },
-  { value: '95%', label: 'Match Accuracy' },
-  { value: '<200ms', label: 'Search Speed' },
-];
+const DEFAULT_OVERVIEW = {
+  activeJobs: 0,
+  candidates: 0,
+  matchAccuracy: 0,
+  searchSpeedMs: 0,
+};
+
+function formatCount(value) {
+  return String(Number(value || 0));
+}
 
 export default function Home() {
   const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
+  const [overview, setOverview] = useState(DEFAULT_OVERVIEW);
 
   const handleSearch = (e) => {
     e.preventDefault();
     window.location.href = `/jobs?q=${encodeURIComponent(searchQuery)}`;
   };
+
+  useEffect(() => {
+    let active = true;
+
+    api.getPlatformOverview()
+      .then((data) => {
+        if (!active) return;
+        setOverview({
+          activeJobs: Number(data.activeJobs || 0),
+          candidates: Number(data.candidates || 0),
+          matchAccuracy: Number(data.matchAccuracy || 0),
+          searchSpeedMs: Number(data.searchSpeedMs || 0),
+        });
+      })
+      .catch(() => {
+        if (!active) return;
+        setOverview(DEFAULT_OVERVIEW);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const stats = [
+    { value: formatCount(overview.activeJobs), label: 'Active Jobs' },
+    { value: formatCount(overview.candidates), label: 'Candidates' },
+    { value: `${Math.round(overview.matchAccuracy || 0)}%`, label: 'Match Accuracy' },
+    { value: `${Math.round(overview.searchSpeedMs || 0)}ms`, label: 'Search Speed' },
+  ];
 
   return (
     <>
@@ -74,7 +110,7 @@ export default function Home() {
       {/* Stats */}
       <section className="container" style={{ paddingBottom: 'var(--space-3xl)' }}>
         <div className="grid grid-4 animate-fade-in delay-4" id="stats-grid">
-          {STATS.map((stat, i) => (
+          {stats.map((stat, i) => (
             <div key={i} className="stat-card" style={{ textAlign: 'center' }}>
               <div className="stat-card-value">{stat.value}</div>
               <div className="stat-card-label">{stat.label}</div>

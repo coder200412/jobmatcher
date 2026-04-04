@@ -17,6 +17,45 @@ function authMiddleware(req, res, next) {
   } catch { return res.status(401).json({ error: 'Invalid token' }); }
 }
 
+// ── GET /api/analytics/platform-overview ──────────────
+router.get('/platform-overview', async (req, res, next) => {
+  try {
+    const [jobsResult, candidatesResult, metricsResult] = await Promise.all([
+      query(
+        `SELECT COUNT(*)::int AS total
+         FROM job_service.jobs
+         WHERE status = 'active'`
+      ),
+      query(
+        `SELECT COUNT(*)::int AS total
+         FROM user_service.users
+         WHERE role = 'candidate' AND is_active = true`
+      ),
+      query(
+        `SELECT
+           COUNT(*)::int AS tracked_jobs,
+           COALESCE(AVG(click_through_rate), 0) AS avg_ctr
+         FROM analytics_service.job_metrics`
+      ),
+    ]);
+
+    const activeJobs = jobsResult.rows[0]?.total || 0;
+    const candidates = candidatesResult.rows[0]?.total || 0;
+    const trackedJobs = metricsResult.rows[0]?.tracked_jobs || 0;
+    const averageCtr = parseFloat(metricsResult.rows[0]?.avg_ctr || 0);
+
+    res.json({
+      activeJobs,
+      candidates,
+      matchAccuracy: trackedJobs > 0 ? Math.round(averageCtr * 100) : 0,
+      searchSpeedMs: 0,
+      trackedJobs,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ── GET /api/analytics/recruiters/:id/trust-score ─────
 router.get('/recruiters/:id/trust-score', async (req, res, next) => {
   try {

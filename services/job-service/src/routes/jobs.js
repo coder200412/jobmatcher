@@ -1,6 +1,6 @@
 const express = require('express');
 const { z } = require('zod');
-const { query } = require('../db');
+const { pool, query } = require('../db');
 const { authMiddleware, optionalAuth, requireRole } = require('../auth');
 const { publishEvent } = require('../kafka');
 const { indexJob, searchJobs, removeJob } = require('../elasticsearch');
@@ -20,6 +20,7 @@ const createJobSchema = z.object({
   currency: z.string().length(3).default('USD'),
   experienceMin: z.number().int().min(0).default(0),
   experienceMax: z.number().int().min(0).optional(),
+  positionsCount: z.number().int().min(1).default(1),
   skills: z.array(z.object({
     skillName: z.string().min(1).max(100),
     isRequired: z.boolean().default(true),
@@ -31,6 +32,12 @@ const updateJobSchema = createJobSchema.partial();
 const reportJobSchema = z.object({
   reason: z.enum(['spam', 'fake_company', 'misleading_description', 'offensive_content', 'other']),
   details: z.string().max(500).optional(),
+});
+const hiringRoundsSchema = z.object({
+  rounds: z.array(z.object({
+    id: z.string().uuid().optional(),
+    name: z.string().trim().min(2).max(120),
+  })).max(10),
 });
 
 function computeJobPriorityScore(job, normalizedSkills) {
@@ -71,6 +78,21 @@ function buildCredibility(row) {
   };
 }
 
+function isJobFull(row) {
+  return Number(row.applications_count || 0) >= Number(row.positions_count || 1);
+}
+
+function formatRound(row) {
+  return {
+    id: row.id,
+    name: row.round_name,
+    order: row.round_order,
+    isActive: row.is_active,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 // ── GET /api/jobs — Search & List ─────────────────────
 router.get('/', optionalAuth, async (req, res, next) => {
   try {
@@ -103,6 +125,7 @@ router.get('/', optionalAuth, async (req, res, next) => {
       ) rc ON rc.job_id = j.id
       LEFT JOIN user_service.users u ON u.id = j.recruiter_id
       WHERE j.status = 'active'
+        AND COALESCE(j.applications_count, 0) < COALESCE(j.positions_count, 1)
     `;
     const params = [];
     let paramIdx = 1;
@@ -139,7 +162,7 @@ router.get('/', optionalAuth, async (req, res, next) => {
     const result = await query(sql, params);
 
     // Count total
-    let countSql = `SELECT COUNT(*) FROM job_service.jobs WHERE status = 'active'`;
+    let countSql = `SELECT COUNT(*) FROM job_service.jobs WHERE status = 'active' AND COALESCE(applications_count, 0) < COALESCE(positions_count, 1)`;
     const countResult = await query(countSql);
 
     res.json({
@@ -181,6 +204,120 @@ router.get('/recruiter/mine', authMiddleware, requireRole('recruiter', 'admin'),
   }
 });
 
+router.get('/:id/hiring-rounds', authMiddleware, requireRole('recruiter', 'admin'), async (req, res, next) => {
+  try {
+    const job = await query('SELECT recruiter_id FROM job_service.jobs WHERE id = $1', [req.params.id]);
+    if (job.rows.length === 0) return res.status(404).json({ error: 'Job not found' });
+    if (job.rows[0].recruiter_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Not your listing' });
+    }
+
+    const roundsResult = await query(
+      `SELECT *
+       FROM job_service.job_rounds
+       WHERE job_id = $1
+         AND is_active = true
+       ORDER BY round_order ASC`,
+      [req.params.id]
+    );
+
+    res.json({ rounds: roundsResult.rows.map(formatRound) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/:id/hiring-rounds', authMiddleware, requireRole('recruiter', 'admin'), async (req, res, next) => {
+  const client = await pool.connect();
+
+  try {
+    const data = hiringRoundsSchema.parse(req.body);
+
+    await client.query('BEGIN');
+
+    const job = await client.query(
+      'SELECT recruiter_id FROM job_service.jobs WHERE id = $1 FOR UPDATE',
+      [req.params.id]
+    );
+    if (job.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Job not found' });
+    }
+    if (job.rows[0].recruiter_id !== req.user.id && req.user.role !== 'admin') {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Not your listing' });
+    }
+
+    const existingRounds = await client.query(
+      'SELECT id FROM job_service.job_rounds WHERE job_id = $1',
+      [req.params.id]
+    );
+    const keepIds = data.rounds.map((round) => round.id).filter(Boolean);
+
+    if (existingRounds.rows.length > 0 && keepIds.length > 0) {
+      await client.query(
+        'DELETE FROM job_service.job_rounds WHERE job_id = $1 AND id <> ALL($2::uuid[])',
+        [req.params.id, keepIds]
+      );
+    } else if (existingRounds.rows.length > 0 && keepIds.length === 0) {
+      await client.query('DELETE FROM job_service.job_rounds WHERE job_id = $1', [req.params.id]);
+    }
+
+    const savedRounds = [];
+    for (const [index, round] of data.rounds.entries()) {
+      const roundOrder = index + 1;
+      if (round.id) {
+        const result = await client.query(
+          `UPDATE job_service.job_rounds
+           SET round_name = $1, round_order = $2, is_active = true, updated_at = NOW()
+           WHERE id = $3 AND job_id = $4
+           RETURNING *`,
+          [round.name, roundOrder, round.id, req.params.id]
+        );
+        if (result.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: 'One of the rounds no longer exists' });
+        }
+        savedRounds.push(result.rows[0]);
+      } else {
+        const result = await client.query(
+          `INSERT INTO job_service.job_rounds (job_id, round_name, round_order)
+           VALUES ($1, $2, $3)
+           RETURNING *`,
+          [req.params.id, round.name, roundOrder]
+        );
+        savedRounds.push(result.rows[0]);
+      }
+    }
+
+    await client.query(
+      `INSERT INTO job_service.application_round_results (application_id, round_id, status)
+       SELECT a.id, jr.id, 'pending'
+       FROM job_service.applications a
+       JOIN job_service.job_rounds jr ON jr.job_id = a.job_id
+       WHERE a.job_id = $1
+         AND jr.is_active = true
+       ON CONFLICT (application_id, round_id) DO NOTHING`,
+      [req.params.id]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      message: 'Hiring rounds updated successfully.',
+      rounds: savedRounds.sort((a, b) => a.round_order - b.round_order).map(formatRound),
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Validation failed', details: err.errors });
+    }
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
 // ── GET /api/jobs/:id ─────────────────────────────────
 router.get('/:id', optionalAuth, async (req, res, next) => {
   try {
@@ -207,6 +344,10 @@ router.get('/:id', optionalAuth, async (req, res, next) => {
       return res.status(404).json({ error: 'Job not found' });
     }
 
+    if ((result.rows[0].status !== 'active' || isJobFull(result.rows[0])) && (!req.user || (req.user.id !== result.rows[0].recruiter_id && req.user.role !== 'admin'))) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
     // Increment views
     await query('UPDATE job_service.jobs SET views_count = views_count + 1 WHERE id = $1', [req.params.id]);
 
@@ -229,10 +370,10 @@ router.post('/', authMiddleware, requireRole('recruiter', 'admin'), async (req, 
     const data = createJobSchema.parse(req.body);
 
     const result = await query(
-      `INSERT INTO job_service.jobs (recruiter_id, title, company, description, location, work_type, salary_min, salary_max, currency, experience_min, experience_max, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `INSERT INTO job_service.jobs (recruiter_id, title, company, description, location, work_type, salary_min, salary_max, currency, experience_min, experience_max, positions_count, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING *`,
-      [req.user.id, data.title, data.company, data.description, data.location, data.workType, data.salaryMin, data.salaryMax, data.currency, data.experienceMin, data.experienceMax, data.status]
+      [req.user.id, data.title, data.company, data.description, data.location, data.workType, data.salaryMin, data.salaryMax, data.currency, data.experienceMin, data.experienceMax, data.positionsCount, data.status]
     );
 
     const job = result.rows[0];
@@ -268,6 +409,7 @@ router.post('/', authMiddleware, requireRole('recruiter', 'admin'), async (req, 
       workType: job.work_type,
       location: job.location,
       experienceMin: job.experience_min,
+      positionsCount: job.positions_count,
       priorityScore,
     }, { source: 'job-service' });
     await publishEvent(KafkaTopics.JOB_EVENTS, event);
@@ -287,7 +429,7 @@ router.put('/:id', authMiddleware, requireRole('recruiter', 'admin'), async (req
     const data = updateJobSchema.parse(req.body);
 
     // Check ownership
-    const existing = await query('SELECT recruiter_id FROM job_service.jobs WHERE id = $1', [req.params.id]);
+    const existing = await query('SELECT recruiter_id, applications_count, positions_count FROM job_service.jobs WHERE id = $1', [req.params.id]);
     if (existing.rows.length === 0) return res.status(404).json({ error: 'Job not found' });
     if (existing.rows[0].recruiter_id !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Not your job listing' });
@@ -301,7 +443,7 @@ router.put('/:id', authMiddleware, requireRole('recruiter', 'admin'), async (req
       title: 'title', company: 'company', description: 'description',
       location: 'location', workType: 'work_type', salaryMin: 'salary_min',
       salaryMax: 'salary_max', currency: 'currency', experienceMin: 'experience_min',
-      experienceMax: 'experience_max', status: 'status',
+      experienceMax: 'experience_max', positionsCount: 'positions_count', status: 'status',
     };
 
     for (const [jsKey, dbKey] of Object.entries(fieldMap)) {
@@ -335,6 +477,13 @@ router.put('/:id', authMiddleware, requireRole('recruiter', 'admin'), async (req
     }
 
     const job = result.rows[0];
+    if (Number(job.applications_count || 0) >= Number(job.positions_count || 1) && job.status !== 'closed') {
+      const closedResult = await query(
+        'UPDATE job_service.jobs SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+        ['closed', req.params.id]
+      );
+      Object.assign(job, closedResult.rows[0]);
+    }
     const currentSkills = data.skills || (await query(
       'SELECT skill_name AS "skillName", is_required AS "isRequired" FROM job_service.job_skills WHERE job_id = $1',
       [req.params.id]
@@ -352,6 +501,7 @@ router.put('/:id', authMiddleware, requireRole('recruiter', 'admin'), async (req
       workType: job.work_type,
       location: job.location,
       experienceMin: job.experience_min,
+      positionsCount: job.positions_count,
       priorityScore,
       changes: data,
     }, { source: 'job-service' });
@@ -469,6 +619,9 @@ function formatJob(row) {
     currency: row.currency,
     experienceMin: row.experience_min,
     experienceMax: row.experience_max,
+    positionsCount: row.positions_count || 1,
+    positionsRemaining: Math.max(0, Number(row.positions_count || 1) - Number(row.applications_count || 0)),
+    isFull: isJobFull(row),
     status: row.status,
     viewsCount: row.views_count,
     applicationsCount: row.applications_count,

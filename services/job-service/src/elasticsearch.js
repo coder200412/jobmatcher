@@ -44,6 +44,7 @@ async function initElasticsearch() {
               salary_max: { type: 'integer' },
               experience_min: { type: 'integer' },
               experience_max: { type: 'integer' },
+              positions_count: { type: 'integer' },
               status: { type: 'keyword' },
               recruiter_id: { type: 'keyword' },
               views_count: { type: 'integer' },
@@ -82,6 +83,7 @@ async function indexJob(job) {
         salary_max: job.salary_max,
         experience_min: job.experience_min,
         experience_max: job.experience_max,
+        positions_count: job.positions_count || 1,
         status: job.status,
         recruiter_id: job.recruiter_id,
         views_count: job.views_count || 0,
@@ -150,6 +152,17 @@ async function searchJobs({ q, location, workType, salaryMin, salaryMax, experie
 
   // Always filter for active jobs
   filter.push({ term: { status: 'active' } });
+  filter.push({
+    script: {
+      script: {
+        source: `
+          def positions = doc.containsKey('positions_count') && doc['positions_count'].size() > 0 ? doc['positions_count'].value : 1;
+          def applications = doc.containsKey('applications_count') && doc['applications_count'].size() > 0 ? doc['applications_count'].value : 0;
+          return applications < positions;
+        `,
+      },
+    },
+  });
 
   try {
     const result = await esClient.search({

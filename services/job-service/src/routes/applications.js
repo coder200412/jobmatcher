@@ -3,6 +3,7 @@ const { z } = require('zod');
 const { pool, query } = require('../db');
 const { authMiddleware, requireRole } = require('../auth');
 const { publishEvent } = require('../kafka');
+const { indexJob, removeJob } = require('../elasticsearch');
 const { EventTypes, KafkaTopics, createEvent } = require('@jobmatch/shared');
 
 const router = express.Router();
@@ -38,6 +39,21 @@ const STATUS_CONFIG = {
     defaultDescription: 'The recruiter added a hiring update.',
     progressPercent: null,
   },
+  round_pending: {
+    title: 'Round updated',
+    defaultDescription: 'The recruiter updated your round status.',
+    progressPercent: null,
+  },
+  round_cleared: {
+    title: 'Round cleared',
+    defaultDescription: 'You cleared this hiring round.',
+    progressPercent: null,
+  },
+  round_not_cleared: {
+    title: 'Round not cleared',
+    defaultDescription: 'You did not clear this hiring round.',
+    progressPercent: null,
+  },
 };
 
 const applySchema = z.object({
@@ -47,6 +63,28 @@ const applySchema = z.object({
 const statusSchema = z.object({
   status: z.enum(['reviewed', 'shortlisted', 'rejected', 'hired']),
   note: z.string().trim().max(500).optional(),
+}).superRefine((value, ctx) => {
+  if (value.status === 'rejected' && !value.note?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['note'],
+      message: 'A valid reason is required when rejecting an application.',
+    });
+  }
+});
+
+const roundResultSchema = z.object({
+  status: z.enum(['pending', 'cleared', 'not_cleared']),
+  reason: z.string().trim().max(500).optional(),
+  note: z.string().trim().max(500).optional(),
+}).superRefine((value, ctx) => {
+  if (value.status === 'not_cleared' && !value.reason?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['reason'],
+      message: 'A valid reason is required when the candidate does not clear a round.',
+    });
+  }
 });
 
 function buildTimelineDetails(eventType, note) {
@@ -111,11 +149,49 @@ function formatTimelineEvent(row) {
   };
 }
 
-function buildTransparency(timeline, fallbackStatus, createdAt) {
+function formatRound(row) {
+  return {
+    id: row.id,
+    roundId: row.roundId || row.id,
+    name: row.name,
+    order: Number(row.order || 0),
+    status: row.status || 'pending',
+    recruiterReason: row.recruiterReason || null,
+    recruiterNote: row.recruiterNote || null,
+    evaluatedAt: row.evaluatedAt || null,
+    evaluatedBy: row.evaluatedBy || null,
+  };
+}
+
+function buildRoundsSummary(rounds = []) {
+  const normalized = rounds.map(formatRound).sort((a, b) => a.order - b.order);
+  const totalRounds = normalized.length;
+  const clearedCount = normalized.filter((round) => round.status === 'cleared').length;
+  const failedRounds = normalized.filter((round) => round.status === 'not_cleared');
+  const failedRound = failedRounds[0] || null;
+  const pendingRound = normalized.find((round) => round.status === 'pending') || null;
+  const completionPercent = totalRounds > 0
+    ? Math.max(20, Math.round((clearedCount / totalRounds) * 100))
+    : 0;
+
+  return {
+    totalRounds,
+    clearedCount,
+    failedCount: failedRounds.length,
+    pendingCount: normalized.filter((round) => round.status === 'pending').length,
+    failedRound,
+    nextPendingRound: pendingRound,
+    allCleared: totalRounds > 0 && clearedCount === totalRounds,
+    completionPercent,
+  };
+}
+
+function buildTransparency(timeline, fallbackStatus, createdAt, rounds = []) {
   const normalized = timeline.map(formatTimelineEvent);
   const recruiterEvents = normalized.filter((event) => event.actorRole === 'recruiter' || event.actorRole === 'admin');
   const firstRecruiterResponseAt = recruiterEvents[0]?.createdAt || null;
   const latestEvent = normalized[normalized.length - 1] || null;
+  const roundsSummary = buildRoundsSummary(rounds);
 
   let firstResponseHours = null;
   if (firstRecruiterResponseAt && createdAt) {
@@ -130,13 +206,21 @@ function buildTransparency(timeline, fallbackStatus, createdAt) {
     hasRecruiterResponse: recruiterEvents.length > 0,
     firstRecruiterResponseAt,
     firstResponseHours,
-    progressPercent: STATUS_CONFIG[latestEvent?.eventType || fallbackStatus]?.progressPercent || 20,
+    progressPercent: roundsSummary.totalRounds > 0
+      ? (roundsSummary.failedRound
+          ? 100
+          : roundsSummary.allCleared
+            ? 100
+            : roundsSummary.completionPercent)
+      : (STATUS_CONFIG[latestEvent?.eventType || fallbackStatus]?.progressPercent || 20),
     totalEvents: normalized.length,
+    roundsSummary,
   };
 }
 
 function formatApplication(row) {
   const timeline = (row.timeline || []).map(formatTimelineEvent);
+  const rounds = (row.rounds || []).map(formatRound).sort((a, b) => a.order - b.order);
 
   return {
     id: row.id,
@@ -152,7 +236,8 @@ function formatApplication(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     timeline,
-    transparency: buildTransparency(timeline, row.status, row.created_at),
+    rounds,
+    transparency: buildTransparency(timeline, row.status, row.created_at, rounds),
     candidate: row.candidate_first_name ? {
       id: row.user_id,
       firstName: row.candidate_first_name,
@@ -164,6 +249,87 @@ function formatApplication(row) {
   };
 }
 
+async function syncJobSearchDocument(jobId) {
+  const result = await query(
+    `SELECT j.*,
+            COALESCE(
+              json_agg(s.skill_name) FILTER (WHERE s.id IS NOT NULL),
+              '[]'
+            ) AS skills
+     FROM job_service.jobs j
+     LEFT JOIN job_service.job_skills s ON s.job_id = j.id
+     WHERE j.id = $1
+     GROUP BY j.id`,
+    [jobId]
+  );
+
+  if (result.rows.length === 0) {
+    return;
+  }
+
+  const job = result.rows[0];
+  if (job.status === 'closed') {
+    await removeJob(jobId);
+    return;
+  }
+
+  await indexJob(job);
+}
+
+async function ensureApplicationRoundResults(client, applicationId, jobId) {
+  await client.query(
+    `INSERT INTO job_service.application_round_results (application_id, round_id, status)
+     SELECT $1, jr.id, 'pending'
+     FROM job_service.job_rounds jr
+     WHERE jr.job_id = $2
+       AND jr.is_active = true
+     ON CONFLICT (application_id, round_id) DO NOTHING`,
+    [applicationId, jobId]
+  );
+}
+
+async function syncRoundsAcrossApplications(client, jobId) {
+  await client.query(
+    `INSERT INTO job_service.application_round_results (application_id, round_id, status)
+     SELECT a.id, jr.id, 'pending'
+     FROM job_service.applications a
+     JOIN job_service.job_rounds jr ON jr.job_id = a.job_id
+     WHERE a.job_id = $1
+       AND jr.is_active = true
+     ON CONFLICT (application_id, round_id) DO NOTHING`,
+    [jobId]
+  );
+}
+
+async function getApplicationRoundCounts(client, applicationId, jobId) {
+  const result = await client.query(
+    `SELECT
+       COUNT(jr.id)::int AS total_rounds,
+       COUNT(*) FILTER (WHERE arr.status = 'cleared')::int AS cleared_count,
+       COUNT(*) FILTER (WHERE arr.status = 'not_cleared')::int AS failed_count
+     FROM job_service.job_rounds jr
+     LEFT JOIN job_service.application_round_results arr
+       ON arr.round_id = jr.id
+      AND arr.application_id = $1
+     WHERE jr.job_id = $2
+       AND jr.is_active = true`,
+    [applicationId, jobId]
+  );
+
+  return result.rows[0] || { total_rounds: 0, cleared_count: 0, failed_count: 0 };
+}
+
+function deriveApplicationStatusFromRounds(currentStatus, counts) {
+  const total = Number(counts.total_rounds || 0);
+  const cleared = Number(counts.cleared_count || 0);
+  const failed = Number(counts.failed_count || 0);
+
+  if (failed > 0) return 'rejected';
+  if (total > 0 && cleared === total) return currentStatus === 'hired' ? 'hired' : 'shortlisted';
+  if (cleared > 0) return 'reviewed';
+  return currentStatus === 'hired' ? 'hired' : 'submitted';
+}
+
 router.post('/:id/apply', authMiddleware, async (req, res, next) => {
   const client = await pool.connect();
 
@@ -173,7 +339,7 @@ router.post('/:id/apply', authMiddleware, async (req, res, next) => {
     await client.query('BEGIN');
 
     const job = await client.query(
-      'SELECT id, title, company, recruiter_id, status FROM job_service.jobs WHERE id = $1 FOR UPDATE',
+      'SELECT id, title, company, recruiter_id, status, positions_count, applications_count FROM job_service.jobs WHERE id = $1 FOR UPDATE',
       [req.params.id]
     );
     if (job.rows.length === 0) {
@@ -183,6 +349,10 @@ router.post('/:id/apply', authMiddleware, async (req, res, next) => {
     if (job.rows[0].status !== 'active') {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Job is not accepting applications' });
+    }
+    if (Number(job.rows[0].applications_count || 0) >= Number(job.rows[0].positions_count || 1)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'All positions for this job have already been filled' });
     }
     if (job.rows[0].recruiter_id === req.user.id) {
       await client.query('ROLLBACK');
@@ -204,7 +374,18 @@ router.post('/:id/apply', authMiddleware, async (req, res, next) => {
       [req.params.id, req.user.id, data.coverLetter]
     );
 
-    await client.query('UPDATE job_service.jobs SET applications_count = applications_count + 1 WHERE id = $1', [req.params.id]);
+    const updatedJob = await client.query(
+      `UPDATE job_service.jobs
+       SET applications_count = applications_count + 1,
+           status = CASE
+             WHEN applications_count + 1 >= positions_count THEN 'closed'
+             ELSE status
+           END,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING applications_count, positions_count, status`,
+      [req.params.id]
+    );
 
     await recordTimelineEvent(client, {
       applicationId: result.rows[0].id,
@@ -218,7 +399,10 @@ router.post('/:id/apply', authMiddleware, async (req, res, next) => {
       },
     });
 
+    await ensureApplicationRoundResults(client, result.rows[0].id, req.params.id);
+
     await client.query('COMMIT');
+    await syncJobSearchDocument(req.params.id);
 
     const event = createEvent(EventTypes.APPLICATION_SUBMITTED, {
       applicationId: result.rows[0].id,
@@ -227,6 +411,9 @@ router.post('/:id/apply', authMiddleware, async (req, res, next) => {
       jobTitle: job.rows[0].title,
       company: job.rows[0].company,
       recruiterId: job.rows[0].recruiter_id,
+      positionsCount: updatedJob.rows[0]?.positions_count || job.rows[0].positions_count,
+      applicationsCount: updatedJob.rows[0]?.applications_count || Number(job.rows[0].applications_count || 0) + 1,
+      jobStatus: updatedJob.rows[0]?.status || job.rows[0].status,
     }, { source: 'job-service' });
     await publishEvent(KafkaTopics.APPLICATION_EVENTS, event);
 
@@ -237,6 +424,9 @@ router.post('/:id/apply', authMiddleware, async (req, res, next) => {
       coverLetter: result.rows[0].cover_letter,
       createdAt: result.rows[0].created_at,
       transparency: buildTransparency([], result.rows[0].status, result.rows[0].created_at),
+      jobStatus: updatedJob.rows[0]?.status || job.rows[0].status,
+      positionsCount: updatedJob.rows[0]?.positions_count || job.rows[0].positions_count,
+      applicationsCount: updatedJob.rows[0]?.applications_count || Number(job.rows[0].applications_count || 0) + 1,
     });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -269,9 +459,34 @@ router.get('/me', authMiddleware, async (req, res, next) => {
                'createdAt', t.created_at,
                'metadata', t.metadata
              ) ORDER BY t.created_at ASC
-           ) FILTER (WHERE t.id IS NOT NULL),
+            ) FILTER (WHERE t.id IS NOT NULL),
            '[]'::jsonb
-         ) AS timeline
+         ) AS timeline,
+         COALESCE(
+           (
+             SELECT jsonb_agg(
+               jsonb_build_object(
+                 'id', jr.id,
+                 'roundId', jr.id,
+                 'name', jr.round_name,
+                 'order', jr.round_order,
+                 'status', COALESCE(arr.status, 'pending'),
+                 'recruiterReason', arr.recruiter_reason,
+                 'recruiterNote', arr.recruiter_note,
+                 'evaluatedAt', arr.evaluated_at,
+                 'evaluatedBy', arr.evaluated_by
+               )
+               ORDER BY jr.round_order ASC
+             )
+             FROM job_service.job_rounds jr
+             LEFT JOIN job_service.application_round_results arr
+               ON arr.round_id = jr.id
+              AND arr.application_id = a.id
+             WHERE jr.job_id = j.id
+               AND jr.is_active = true
+           ),
+           '[]'::jsonb
+         ) AS rounds
        FROM job_service.applications a
        JOIN job_service.jobs j ON a.job_id = j.id
        LEFT JOIN job_service.application_timeline_events t ON t.application_id = a.id
@@ -321,9 +536,34 @@ router.get('/:id/applications', authMiddleware, requireRole('recruiter', 'admin'
                'createdAt', t.created_at,
                'metadata', t.metadata
              ) ORDER BY t.created_at ASC
-           ) FILTER (WHERE t.id IS NOT NULL),
+            ) FILTER (WHERE t.id IS NOT NULL),
            '[]'::jsonb
-         ) AS timeline
+         ) AS timeline,
+         COALESCE(
+           (
+             SELECT jsonb_agg(
+               jsonb_build_object(
+                 'id', jr.id,
+                 'roundId', jr.id,
+                 'name', jr.round_name,
+                 'order', jr.round_order,
+                 'status', COALESCE(arr.status, 'pending'),
+                 'recruiterReason', arr.recruiter_reason,
+                 'recruiterNote', arr.recruiter_note,
+                 'evaluatedAt', arr.evaluated_at,
+                 'evaluatedBy', arr.evaluated_by
+               )
+               ORDER BY jr.round_order ASC
+             )
+             FROM job_service.job_rounds jr
+             LEFT JOIN job_service.application_round_results arr
+               ON arr.round_id = jr.id
+              AND arr.application_id = a.id
+             WHERE jr.job_id = j.id
+               AND jr.is_active = true
+           ),
+           '[]'::jsonb
+         ) AS rounds
        FROM job_service.applications a
        JOIN job_service.jobs j ON a.job_id = j.id
        LEFT JOIN user_service.users u ON u.id = a.user_id
@@ -339,6 +579,131 @@ router.get('/:id/applications', authMiddleware, requireRole('recruiter', 'admin'
     });
   } catch (err) {
     next(err);
+  }
+});
+
+router.put('/:id/rounds/:roundId', authMiddleware, requireRole('recruiter', 'admin'), async (req, res, next) => {
+  const client = await pool.connect();
+
+  try {
+    const data = roundResultSchema.parse(req.body);
+
+    await client.query('BEGIN');
+
+    const app = await client.query(
+      `SELECT a.*, j.recruiter_id, j.title AS job_title, jr.id AS round_id, jr.round_name, jr.round_order
+       FROM job_service.applications a
+       JOIN job_service.jobs j ON j.id = a.job_id
+       JOIN job_service.job_rounds jr ON jr.id = $2 AND jr.job_id = a.job_id AND jr.is_active = true
+       WHERE a.id = $1
+       FOR UPDATE`,
+      [req.params.id, req.params.roundId]
+    );
+
+    if (app.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Application or round not found' });
+    }
+    if (app.rows[0].recruiter_id !== req.user.id && req.user.role !== 'admin') {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    await client.query(
+      `INSERT INTO job_service.application_round_results
+        (application_id, round_id, status, recruiter_reason, recruiter_note, evaluated_by, evaluated_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+       ON CONFLICT (application_id, round_id) DO UPDATE SET
+         status = EXCLUDED.status,
+         recruiter_reason = EXCLUDED.recruiter_reason,
+         recruiter_note = EXCLUDED.recruiter_note,
+         evaluated_by = EXCLUDED.evaluated_by,
+         evaluated_at = EXCLUDED.evaluated_at,
+         updated_at = NOW()`,
+      [
+        req.params.id,
+        req.params.roundId,
+        data.status,
+        data.status === 'not_cleared' ? data.reason?.trim() || null : null,
+        data.note?.trim() || null,
+        req.user.id,
+      ]
+    );
+
+    const counts = await getApplicationRoundCounts(client, req.params.id, app.rows[0].job_id);
+    const derivedStatus = deriveApplicationStatusFromRounds(app.rows[0].status, counts);
+
+    const updatedApplication = await client.query(
+      'UPDATE job_service.applications SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+      [derivedStatus, req.params.id]
+    );
+
+    const eventTypeMap = {
+      pending: 'round_pending',
+      cleared: 'round_cleared',
+      not_cleared: 'round_not_cleared',
+    };
+
+    const timelineEvent = await recordTimelineEvent(client, {
+      applicationId: req.params.id,
+      jobId: app.rows[0].job_id,
+      candidateId: app.rows[0].user_id,
+      actorId: req.user.id,
+      actorRole: req.user.role,
+      eventType: eventTypeMap[data.status],
+      note: data.status === 'not_cleared'
+        ? `${app.rows[0].round_name}: ${data.reason?.trim()}`
+        : `${app.rows[0].round_name}${data.note?.trim() ? ` — ${data.note.trim()}` : ''}`,
+      metadata: {
+        roundId: app.rows[0].round_id,
+        roundName: app.rows[0].round_name,
+        roundOrder: app.rows[0].round_order,
+        result: data.status,
+        recruiterReason: data.reason?.trim() || null,
+        recruiterNote: data.note?.trim() || null,
+      },
+    });
+
+    await client.query('COMMIT');
+
+    if (app.rows[0].status !== derivedStatus) {
+      const event = createEvent(EventTypes.APPLICATION_STATUS_CHANGED, {
+        applicationId: req.params.id,
+        jobId: app.rows[0].job_id,
+        userId: app.rows[0].user_id,
+        recruiterId: app.rows[0].recruiter_id,
+        jobTitle: app.rows[0].job_title,
+        oldStatus: app.rows[0].status,
+        newStatus: derivedStatus,
+        note: data.status === 'not_cleared'
+          ? `Did not clear ${app.rows[0].round_name}. ${data.reason?.trim()}`
+          : `Updated ${app.rows[0].round_name} to ${data.status}.${data.note?.trim() ? ` ${data.note.trim()}` : ''}`,
+        hasFeedback: Boolean(data.reason?.trim() || data.note?.trim()),
+      }, { source: 'job-service' });
+      await publishEvent(KafkaTopics.APPLICATION_EVENTS, event);
+    }
+
+    res.json({
+      id: updatedApplication.rows[0].id,
+      status: updatedApplication.rows[0].status,
+      updatedAt: updatedApplication.rows[0].updated_at,
+      timelineEvent,
+      roundResult: {
+        roundId: app.rows[0].round_id,
+        name: app.rows[0].round_name,
+        order: app.rows[0].round_order,
+        status: data.status,
+        recruiterReason: data.status === 'not_cleared' ? data.reason?.trim() || null : null,
+        recruiterNote: data.note?.trim() || null,
+        evaluatedAt: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err instanceof z.ZodError) return res.status(400).json({ error: 'Validation failed', details: err.errors });
+    next(err);
+  } finally {
+    client.release();
   }
 });
 

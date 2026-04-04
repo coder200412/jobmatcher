@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS job_service.jobs (
     currency VARCHAR(3) DEFAULT 'USD',
     experience_min INTEGER DEFAULT 0,
     experience_max INTEGER,
+    positions_count INTEGER DEFAULT 1 CHECK (positions_count > 0),
     status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'closed', 'draft')),
     views_count INTEGER DEFAULT 0,
     applications_count INTEGER DEFAULT 0,
@@ -113,7 +114,12 @@ CREATE TABLE IF NOT EXISTS job_service.jobs (
 );
 
 ALTER TABLE IF EXISTS job_service.jobs
-ADD COLUMN IF NOT EXISTS priority_score INTEGER DEFAULT 0;
+ADD COLUMN IF NOT EXISTS priority_score INTEGER DEFAULT 0,
+ADD COLUMN IF NOT EXISTS positions_count INTEGER DEFAULT 1;
+
+UPDATE job_service.jobs
+SET positions_count = 1
+WHERE positions_count IS NULL OR positions_count < 1;
 
 CREATE TABLE IF NOT EXISTS job_service.job_skills (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -134,6 +140,31 @@ CREATE TABLE IF NOT EXISTS job_service.applications (
     UNIQUE(job_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS job_service.job_rounds (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_id UUID REFERENCES job_service.jobs(id) ON DELETE CASCADE,
+    round_name VARCHAR(120) NOT NULL,
+    round_order INTEGER NOT NULL CHECK (round_order > 0),
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(job_id, round_order)
+);
+
+CREATE TABLE IF NOT EXISTS job_service.application_round_results (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    application_id UUID REFERENCES job_service.applications(id) ON DELETE CASCADE,
+    round_id UUID REFERENCES job_service.job_rounds(id) ON DELETE CASCADE,
+    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'cleared', 'not_cleared')),
+    recruiter_reason TEXT,
+    recruiter_note TEXT,
+    evaluated_by UUID,
+    evaluated_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(application_id, round_id)
+);
+
 CREATE TABLE IF NOT EXISTS job_service.application_timeline_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     application_id UUID REFERENCES job_service.applications(id) ON DELETE CASCADE,
@@ -141,12 +172,19 @@ CREATE TABLE IF NOT EXISTS job_service.application_timeline_events (
     candidate_id UUID NOT NULL,
     actor_id UUID,
     actor_role VARCHAR(20) DEFAULT 'system' CHECK (actor_role IN ('candidate', 'recruiter', 'admin', 'system')),
-    event_type VARCHAR(30) NOT NULL CHECK (event_type IN ('submitted', 'reviewed', 'shortlisted', 'rejected', 'hired', 'note')),
+    event_type VARCHAR(30) NOT NULL CHECK (event_type IN ('submitted', 'reviewed', 'shortlisted', 'rejected', 'hired', 'note', 'round_pending', 'round_cleared', 'round_not_cleared')),
     title VARCHAR(120) NOT NULL,
     description TEXT,
     metadata JSONB DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE IF EXISTS job_service.application_timeline_events
+DROP CONSTRAINT IF EXISTS application_timeline_events_event_type_check;
+
+ALTER TABLE IF EXISTS job_service.application_timeline_events
+ADD CONSTRAINT application_timeline_events_event_type_check
+CHECK (event_type IN ('submitted', 'reviewed', 'shortlisted', 'rejected', 'hired', 'note', 'round_pending', 'round_cleared', 'round_not_cleared'));
 
 CREATE TABLE IF NOT EXISTS job_service.job_reports (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -168,6 +206,9 @@ CREATE INDEX IF NOT EXISTS idx_job_skills_skill ON job_service.job_skills(skill_
 CREATE INDEX IF NOT EXISTS idx_applications_job ON job_service.applications(job_id);
 CREATE INDEX IF NOT EXISTS idx_applications_user ON job_service.applications(user_id);
 CREATE INDEX IF NOT EXISTS idx_applications_status ON job_service.applications(status);
+CREATE INDEX IF NOT EXISTS idx_job_rounds_job_order ON job_service.job_rounds(job_id, round_order);
+CREATE INDEX IF NOT EXISTS idx_application_round_results_app ON job_service.application_round_results(application_id);
+CREATE INDEX IF NOT EXISTS idx_application_round_results_round ON job_service.application_round_results(round_id);
 CREATE INDEX IF NOT EXISTS idx_application_timeline_app_created ON job_service.application_timeline_events(application_id, created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_application_timeline_job_created ON job_service.application_timeline_events(job_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_application_timeline_candidate_created ON job_service.application_timeline_events(candidate_id, created_at DESC);

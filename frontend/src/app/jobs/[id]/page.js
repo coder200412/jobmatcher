@@ -140,6 +140,11 @@ export default function JobDetailPage() {
 
   if (!job) return null;
 
+  const positionsCount = job.positionsCount || 1;
+  const applicationsCount = job.applicationsCount || job.applications_count || 0;
+  const positionsRemaining = job.positionsRemaining ?? Math.max(0, positionsCount - applicationsCount);
+  const jobIsUnavailable = job.status !== 'active' || job.isFull || positionsRemaining <= 0;
+
   const sections = job.jobInsights?.sections || {};
 
   return (
@@ -161,8 +166,18 @@ export default function JobDetailPage() {
             {job.location && <div className="badge badge-neutral">📍 {job.location}</div>}
             <div className="badge badge-neutral">💼 {job.workType || job.work_type}</div>
             <div className="badge badge-neutral">📊 {job.experienceMin || job.experience_min}–{job.experienceMax || job.experience_max || '10'}+ years</div>
+            <div className="badge badge-neutral">👥 {positionsCount} positions · {positionsRemaining} left</div>
             <div className="badge badge-success">{formatSalary(job.salaryMin || job.salary_min, job.salaryMax || job.salary_max)}</div>
           </div>
+
+          {jobIsUnavailable && (
+            <div className="glass-card" style={{ marginBottom: 'var(--space-xl)', borderColor: 'rgba(245,158,11,0.25)', background: 'rgba(245,158,11,0.08)' }}>
+              <h3 style={{ marginBottom: '8px' }}>This job is no longer accepting applications</h3>
+              <p style={{ color: 'var(--text-secondary)' }}>
+                The available positions have already been filled. Job seekers will no longer see this listing in the open jobs feed.
+              </p>
+            </div>
+          )}
 
           {/* Skills */}
           <div style={{ marginBottom: 'var(--space-xl)' }}>
@@ -334,10 +349,16 @@ export default function JobDetailPage() {
               <>
                 <h4 style={{ marginBottom: 'var(--space-md)' }}>Interested in this role?</h4>
                 {user ? (
-                  <button className="btn btn-primary btn-lg" style={{ width: '100%' }} id="apply-btn"
-                    onClick={() => setShowApplyModal(true)}>
-                    Apply Now 🚀
-                  </button>
+                  jobIsUnavailable ? (
+                    <button className="btn btn-secondary btn-lg" style={{ width: '100%' }} disabled>
+                      Positions Filled
+                    </button>
+                  ) : (
+                    <button className="btn btn-primary btn-lg" style={{ width: '100%' }} id="apply-btn"
+                      onClick={() => setShowApplyModal(true)}>
+                      Apply Now 🚀
+                    </button>
+                  )
                 ) : (
                   <Link href="/auth/login" className="btn btn-primary btn-lg" style={{ width: '100%' }}>
                     Sign in to Apply
@@ -360,7 +381,8 @@ export default function JobDetailPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
               {[
                 ['👁', 'Views', job.viewsCount || job.views_count || 0],
-                ['📝', 'Applications', job.applicationsCount || job.applications_count || 0],
+                ['📝', 'Applications', applicationsCount],
+                ['👥', 'Positions', `${positionsCount} total · ${positionsRemaining} left`],
                 ['🔥', 'Priority', job.priorityScore || job.priority_score || 0],
                 ['📅', 'Posted', new Date(job.createdAt || job.created_at).toLocaleDateString()],
                 ['🏷', 'Status', job.status],

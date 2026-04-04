@@ -10,15 +10,18 @@ export default function RecruiterDashboard() {
   const { user } = useAuth();
   const [jobs, setJobs] = useState([]);
   const [analytics, setAnalytics] = useState(null);
+  const [experimentSummary, setExperimentSummary] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
       api.getMyJobs().catch(() => ({ jobs: [] })),
       api.getRecruiterDashboard().catch(() => null),
-    ]).then(([jobsData, analyticsData]) => {
+      api.getRecommendationExperimentSummary().catch(() => null),
+    ]).then(([jobsData, analyticsData, experimentData]) => {
       setJobs(jobsData.jobs || []);
       setAnalytics(analyticsData);
+      setExperimentSummary(experimentData);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -60,6 +63,39 @@ export default function RecruiterDashboard() {
       {analytics?.trustScore && (
         <div style={{ marginBottom: 'var(--space-2xl)' }}>
           <RecruiterTrustCard trust={analytics.trustScore} title="Your Recruiter Trust Score" />
+        </div>
+      )}
+
+      {experimentSummary?.variants?.length > 0 && (
+        <div style={{ marginBottom: 'var(--space-2xl)' }}>
+          <div className="section-header">
+            <h2>🧪 Recommendation Experiment</h2>
+          </div>
+          <div className="grid grid-2">
+            {experimentSummary.variants.map((variant) => (
+              <div key={variant.variant} className="glass-card">
+                <h4 style={{ marginBottom: 'var(--space-md)' }}>{variant.variant}</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 'var(--space-md)' }}>
+                  <div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Clicks</div>
+                    <div style={{ fontWeight: 700, fontSize: '1.2rem' }}>{variant.clicks}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Applies</div>
+                    <div style={{ fontWeight: 700, fontSize: '1.2rem' }}>{variant.applies}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>CTR</div>
+                    <div style={{ fontWeight: 700, fontSize: '1.2rem' }}>{variant.clickThroughRate}%</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Not Interested</div>
+                    <div style={{ fontWeight: 700, fontSize: '1.2rem' }}>{variant.notInterested}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

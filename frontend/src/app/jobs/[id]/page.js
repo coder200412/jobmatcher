@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -18,8 +18,8 @@ function formatSalary(min, max) {
 export default function JobDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
-  const router = useRouter();
   const [job, setJob] = useState(null);
+  const [matchAnalysis, setMatchAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
@@ -27,30 +27,95 @@ export default function JobDetailPage() {
   const [showApplyModal, setShowApplyModal] = useState(false);
   const [error, setError] = useState('');
   const [recruiterTrust, setRecruiterTrust] = useState(null);
+  const [referrals, setReferrals] = useState([]);
+  const [reporting, setReporting] = useState(false);
+  const [reportMessage, setReportMessage] = useState('');
 
   useEffect(() => {
+    let cancelled = false;
+
     api.getJob(id)
       .then(async (jobData) => {
+        if (cancelled) return;
         setJob(jobData);
         if (jobData?.recruiterId) {
           const trust = await api.getRecruiterTrustScore(jobData.recruiterId).catch(() => null);
-          setRecruiterTrust(trust);
+          if (!cancelled) {
+            setRecruiterTrust(trust);
+          }
         }
       })
-      .catch(err => setError(err.message))
-      .finally(() => setLoading(false));
+      .catch(err => {
+        if (!cancelled) {
+          setError(err.message);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
+
+  useEffect(() => {
+    if (!user || user.role !== 'candidate') {
+      setMatchAnalysis(null);
+      setReferrals([]);
+      return;
+    }
+
+    let cancelled = false;
+    Promise.all([
+      api.getJobMatchAnalysis(id).catch(() => null),
+      api.getReferralMatches(id, 4).catch(() => ({ referrals: [] })),
+      api.submitRecommendationFeedback(id, 'click').catch(() => null),
+    ]).then(([analysis, referralData]) => {
+      if (cancelled) return;
+      setMatchAnalysis(analysis);
+      setReferrals(referralData?.referrals || []);
+    }).catch(() => {
+      if (!cancelled) {
+        setMatchAnalysis(null);
+        setReferrals([]);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id, user]);
 
   const handleApply = async () => {
     setApplying(true);
     try {
       await api.applyToJob(id, { coverLetter });
+      if (user?.role === 'candidate') {
+        await api.submitRecommendationFeedback(id, 'apply').catch(() => {});
+      }
       setApplied(true);
       setShowApplyModal(false);
     } catch (err) {
       setError(err.message);
     } finally {
       setApplying(false);
+    }
+  };
+
+  const handleReportJob = async (reason) => {
+    setReporting(true);
+    setReportMessage('');
+    try {
+      const response = await api.reportJob(id, { reason });
+      setReportMessage(response.message);
+      setJob((current) => current ? { ...current, credibility: response.credibility } : current);
+    } catch (err) {
+      setReportMessage(err.message);
+    } finally {
+      setReporting(false);
     }
   };
 
@@ -74,6 +139,8 @@ export default function JobDetailPage() {
   );
 
   if (!job) return null;
+
+  const sections = job.jobInsights?.sections || {};
 
   return (
     <div className="container section" id="job-detail">
@@ -110,6 +177,86 @@ export default function JobDetailPage() {
             </div>
           </div>
 
+          {matchAnalysis && (
+            <div className="glass-card" style={{ marginBottom: 'var(--space-xl)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-md)', alignItems: 'flex-start', marginBottom: 'var(--space-md)', flexWrap: 'wrap' }}>
+                <div>
+                  <h3 style={{ marginBottom: '6px' }}>Explainable Match Score</h3>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    Your profile matches {matchAnalysis.matchPercent}% of this opportunity.
+                  </p>
+                </div>
+                {matchAnalysis.prioritySignal && (
+                  <span className={`badge ${matchAnalysis.prioritySignal.level === 'urgent' ? 'badge-success' : matchAnalysis.prioritySignal.level === 'strong' ? 'badge-primary' : 'badge-neutral'}`}>
+                    {matchAnalysis.prioritySignal.label}
+                  </span>
+                )}
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 'var(--space-lg)', marginBottom: 'var(--space-lg)' }}>
+                <div>
+                  <div style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 'var(--space-sm)' }}>
+                    You already cover
+                  </div>
+                  <div className="flex flex-wrap gap-xs">
+                    {(matchAnalysis.matchedSkills || []).length > 0 ? matchAnalysis.matchedSkills.slice(0, 6).map((skill) => (
+                      <span key={skill} className="skill-tag" style={{ background: 'rgba(34,197,94,0.12)', borderColor: 'rgba(34,197,94,0.2)' }}>
+                        {skill}
+                      </span>
+                    )) : <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Add more profile skills to improve the analysis.</span>}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 'var(--space-sm)' }}>
+                    Skill gap
+                  </div>
+                  <div className="flex flex-wrap gap-xs">
+                    {(matchAnalysis.missingSkills || []).length > 0 ? matchAnalysis.missingSkills.slice(0, 6).map((skill) => (
+                      <span key={skill} className="skill-tag" style={{ background: 'rgba(245,158,11,0.12)', borderColor: 'rgba(245,158,11,0.18)' }}>
+                        {skill}
+                      </span>
+                    )) : <span style={{ color: 'var(--success)', fontSize: '0.9rem' }}>You cover the listed skills well.</span>}
+                  </div>
+                </div>
+              </div>
+
+              {matchAnalysis.feedReasons?.length > 0 && (
+                <div style={{ marginBottom: 'var(--space-lg)' }}>
+                  <div style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 'var(--space-sm)' }}>
+                    Why this role is showing up
+                  </div>
+                  <div style={{ display: 'grid', gap: 'var(--space-sm)' }}>
+                    {matchAnalysis.feedReasons.map((reason) => (
+                      <div key={reason} style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--bg-glass)', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                        {reason}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {matchAnalysis.learningPath?.length > 0 && (
+                <div>
+                  <div style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 'var(--space-sm)' }}>
+                    Learning path to close the gap
+                  </div>
+                  <div style={{ display: 'grid', gap: 'var(--space-md)' }}>
+                    {matchAnalysis.learningPath.map((item) => (
+                      <div key={item.skill} style={{ padding: '14px', borderRadius: 'var(--radius-lg)', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.12)' }}>
+                        <div style={{ fontWeight: 700, marginBottom: '6px' }}>{item.skill}</div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', display: 'grid', gap: '4px' }}>
+                          {item.roadmap.map((step) => (
+                            <div key={step}>• {step}</div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Description */}
           <div className="glass-card" style={{ marginBottom: 'var(--space-xl)' }}>
             <h3 style={{ marginBottom: 'var(--space-md)' }}>Job Description</h3>
@@ -117,6 +264,57 @@ export default function JobDetailPage() {
               {job.description}
             </div>
           </div>
+
+          {job.jobInsights && (
+            <div className="glass-card" style={{ marginBottom: 'var(--space-xl)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-md)', flexWrap: 'wrap', marginBottom: 'var(--space-lg)' }}>
+                <div>
+                  <h3 style={{ marginBottom: '6px' }}>Cleaned Job Insights</h3>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    Structured highlights extracted from the description.
+                  </p>
+                </div>
+                <span className="badge badge-neutral">{job.jobInsights.seniority}</span>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 'var(--space-lg)' }}>
+                <div>
+                  <h4 style={{ marginBottom: 'var(--space-sm)' }}>Responsibilities</h4>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', display: 'grid', gap: '6px' }}>
+                    {(sections.responsibilities || []).slice(0, 4).map((line) => <div key={line}>• {line}</div>)}
+                  </div>
+                </div>
+                <div>
+                  <h4 style={{ marginBottom: 'var(--space-sm)' }}>Qualifications</h4>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', display: 'grid', gap: '6px' }}>
+                    {(sections.requirements || []).slice(0, 4).map((line) => <div key={line}>• {line}</div>)}
+                  </div>
+                </div>
+                <div>
+                  <h4 style={{ marginBottom: 'var(--space-sm)' }}>Benefits & Signals</h4>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', display: 'grid', gap: '6px' }}>
+                    {(sections.benefits || []).slice(0, 4).map((line) => <div key={line}>• {line}</div>)}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 'var(--space-lg)' }}>
+                <div style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: 'var(--space-sm)' }}>
+                  Keywords and likely next-step roles
+                </div>
+                <div className="flex flex-wrap gap-xs" style={{ marginBottom: 'var(--space-md)' }}>
+                  {(job.jobInsights.keywords || []).map((keyword) => (
+                    <span key={keyword} className="skill-tag">{keyword}</span>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-xs">
+                  {(job.jobInsights.nextRoleTrajectory || []).map((role) => (
+                    <span key={role} className="badge badge-neutral">{role}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Sidebar */}
@@ -148,6 +346,12 @@ export default function JobDetailPage() {
               </>
             )}
             {error && <p style={{ color: 'var(--error)', fontSize: '0.85rem', marginTop: 'var(--space-sm)' }}>{error}</p>}
+            {matchAnalysis?.prioritySignal && !applied && (
+              <div style={{ marginTop: 'var(--space-md)', padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.15)', color: 'var(--text-secondary)', fontSize: '0.88rem', textAlign: 'left' }}>
+                <strong style={{ color: 'var(--text-primary)', display: 'block', marginBottom: '4px' }}>{matchAnalysis.prioritySignal.label}</strong>
+                {matchAnalysis.prioritySignal.reason}
+              </div>
+            )}
           </div>
 
           {/* Job Info Card */}
@@ -157,6 +361,7 @@ export default function JobDetailPage() {
               {[
                 ['👁', 'Views', job.viewsCount || job.views_count || 0],
                 ['📝', 'Applications', job.applicationsCount || job.applications_count || 0],
+                ['🔥', 'Priority', job.priorityScore || job.priority_score || 0],
                 ['📅', 'Posted', new Date(job.createdAt || job.created_at).toLocaleDateString()],
                 ['🏷', 'Status', job.status],
               ].map(([icon, label, value]) => (
@@ -167,6 +372,56 @@ export default function JobDetailPage() {
               ))}
             </div>
           </div>
+
+          {job.credibility && (
+            <div className="glass-card" style={{ marginTop: 'var(--space-lg)' }}>
+              <h4 style={{ marginBottom: 'var(--space-md)' }}>Community Trust Layer</h4>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-sm)' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Credibility score</span>
+                <span className={`badge ${job.credibility.score >= 80 ? 'badge-success' : job.credibility.score >= 60 ? 'badge-primary' : 'badge-warning'}`}>
+                  {job.credibility.score}/100 · {job.credibility.label}
+                </span>
+              </div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', display: 'grid', gap: '6px' }}>
+                <div>Verified recruiter: {job.credibility.verifiedRecruiter ? 'Yes' : 'Not yet'}</div>
+                <div>User reports: {job.credibility.reportCount}</div>
+              </div>
+              {user && (
+                <div style={{ marginTop: 'var(--space-md)' }}>
+                  <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    Report this job
+                  </div>
+                  <div className="flex flex-wrap gap-xs">
+                    {['spam', 'fake_company', 'misleading_description'].map((reason) => (
+                      <button key={reason} type="button" className="btn btn-ghost btn-sm" disabled={reporting} onClick={() => handleReportJob(reason)}>
+                        {reason.replace(/_/g, ' ')}
+                      </button>
+                    ))}
+                  </div>
+                  {reportMessage && (
+                    <div style={{ color: reportMessage.toLowerCase().includes('error') ? 'var(--error)' : 'var(--success)', fontSize: '0.82rem', marginTop: '8px' }}>
+                      {reportMessage}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {user?.role === 'candidate' && referrals.length > 0 && (
+            <div className="glass-card" style={{ marginTop: 'var(--space-lg)' }}>
+              <h4 style={{ marginBottom: 'var(--space-md)' }}>Referral Matches</h4>
+              <div style={{ display: 'grid', gap: 'var(--space-sm)' }}>
+                {referrals.map((referral) => (
+                  <div key={referral.id} style={{ padding: '12px', borderRadius: 'var(--radius-md)', background: 'var(--bg-glass)' }}>
+                    <div style={{ fontWeight: 700 }}>{referral.fullName}</div>
+                    {referral.headline && <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{referral.headline}</div>}
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginTop: '4px' }}>{referral.reason}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {recruiterTrust && (
             <div style={{ marginTop: 'var(--space-lg)' }}>

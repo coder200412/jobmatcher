@@ -9,15 +9,18 @@ export default function CandidateDashboard() {
   const { user } = useAuth();
   const [applications, setApplications] = useState([]);
   const [recommendations, setRecommendations] = useState([]);
+  const [careerInsights, setCareerInsights] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
       api.getMyApplications().catch(() => ({ applications: [] })),
       api.getJobRecommendations(6).catch(() => ({ recommendations: [] })),
-    ]).then(([appsData, recsData]) => {
+      api.getCareerInsights().catch(() => null),
+    ]).then(([appsData, recsData, careerData]) => {
       setApplications(appsData.applications || []);
       setRecommendations(recsData.recommendations || []);
+      setCareerInsights(careerData);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -107,6 +110,39 @@ export default function CandidateDashboard() {
         )}
       </div>
 
+      {careerInsights && (
+        <div className="glass-card" style={{ marginBottom: 'var(--space-2xl)' }}>
+          <div className="section-header" style={{ marginBottom: 'var(--space-md)' }}>
+            <h2>📈 Career Trajectory Predictor</h2>
+            <span className="badge badge-primary">{careerInsights.currentLevel}</span>
+          </div>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-md)' }}>
+            {careerInsights.guidance}
+          </p>
+          <div className="flex flex-wrap gap-xs" style={{ marginBottom: 'var(--space-md)' }}>
+            {(careerInsights.nextRoles || []).map((role) => (
+              <span key={role} className="skill-tag">{role}</span>
+            ))}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 'var(--space-lg)' }}>
+            <div>
+              <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                Salary progression
+              </div>
+              <div style={{ fontWeight: 700 }}>
+                {careerInsights.salaryProgressionLpa?.estimatedLow}–{careerInsights.salaryProgressionLpa?.estimatedHigh} {careerInsights.salaryProgressionLpa?.currency}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                Market openings
+              </div>
+              <div style={{ fontWeight: 700 }}>{careerInsights.marketOpenings}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Recommendations */}
       <div>
         <div className="section-header">
@@ -129,13 +165,25 @@ export default function CandidateDashboard() {
                     <div className="job-card-company">{job.company}</div>
                   </div>
                   <div className={`match-score ${job.matchScore > 0.7 ? 'high' : ''}`}>
-                    {Math.round(job.matchScore * 100)}%
+                    {job.matchPercent || Math.round(job.matchScore * 100)}%
                   </div>
                 </div>
                 <div className="job-card-meta">
                   {job.location && <span>📍 {job.location}</span>}
                   <span>💼 {job.workType}</span>
                 </div>
+                {job.prioritySignal && (
+                  <div style={{ marginBottom: 'var(--space-sm)' }}>
+                    <span className={`badge ${job.prioritySignal.level === 'urgent' ? 'badge-success' : job.prioritySignal.level === 'strong' ? 'badge-primary' : 'badge-neutral'}`}>
+                      {job.prioritySignal.label}
+                    </span>
+                  </div>
+                )}
+                {job.missingSkills?.length > 0 && (
+                  <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: 'var(--space-sm)' }}>
+                    Gap to close: {job.missingSkills.slice(0, 2).join(', ')}
+                  </div>
+                )}
                 <div className="job-card-skills">
                   {(job.skills || []).slice(0, 3).map((s, si) => (
                     <span key={si} className="skill-tag">{typeof s === 'string' ? s : s.skillName}</span>

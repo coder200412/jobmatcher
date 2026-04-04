@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import api from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 
 function formatSalary(min, max) {
   const fmt = (n) => `$${(n / 1000).toFixed(0)}K`;
@@ -15,6 +16,7 @@ function formatSalary(min, max) {
 
 export default function JobsPageClient() {
   const searchParams = useSearchParams();
+  const { user } = useAuth();
   const [jobs, setJobs] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -133,7 +135,8 @@ export default function JobsPageClient() {
       ) : (
         <div className="grid grid-2" id="jobs-grid">
           {jobs.map((job, i) => (
-            <Link key={job.id} href={`/jobs/${job.id}`} className="job-card animate-fade-in" style={{ animationDelay: `${i * 0.05}s`, opacity: 0 }}>
+            <Link key={job.id} href={`/jobs/${job.id}`} className="job-card animate-fade-in" style={{ animationDelay: `${i * 0.05}s`, opacity: 0 }}
+              onClick={() => user?.role === 'candidate' ? api.submitRecommendationFeedback(job.id, 'click').catch(() => {}) : undefined}>
               <div className="job-card-header">
                 <div>
                   <div className="job-card-title">{job.title}</div>
@@ -152,6 +155,17 @@ export default function JobsPageClient() {
                 {(job.experienceMin !== undefined || job.experience_min !== undefined) && (
                   <span>📊 {job.experienceMin || job.experience_min}–{job.experienceMax || job.experience_max || '10'}+ yrs</span>
                 )}
+              </div>
+
+              <div className="flex gap-xs" style={{ marginBottom: 'var(--space-sm)', flexWrap: 'wrap' }}>
+                {(job.priorityScore || job.priority_score) ? (
+                  <span className="badge badge-primary">🔥 Priority {job.priorityScore || job.priority_score}</span>
+                ) : null}
+                {job.credibility ? (
+                  <span className={`badge ${job.credibility.score >= 80 ? 'badge-success' : job.credibility.score >= 60 ? 'badge-neutral' : 'badge-warning'}`}>
+                    {job.credibility.label}
+                  </span>
+                ) : null}
               </div>
 
               {formatSalary(job.salaryMin || job.salary_min, job.salaryMax || job.salary_max) && (

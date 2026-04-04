@@ -79,6 +79,22 @@ function buildLoginRedirect(email, verified, message) {
   return `${frontendUrl}/auth/login?${qs.toString()}`;
 }
 
+function inferRecruiterVerification(email, role) {
+  if (role !== 'recruiter') return false;
+  const domain = String(email || '').split('@')[1]?.toLowerCase() || '';
+  const freeEmailDomains = new Set([
+    'gmail.com',
+    'yahoo.com',
+    'outlook.com',
+    'hotmail.com',
+    'icloud.com',
+    'proton.me',
+    'protonmail.com',
+  ]);
+
+  return Boolean(domain) && !freeEmailDomains.has(domain);
+}
+
 async function publishUserRegistered(user) {
   const event = createEvent(EventTypes.USER_REGISTERED, {
     userId: user.id,
@@ -120,10 +136,17 @@ async function completeVerification(client, email, token) {
   }
 
   const result = await client.query(
-    `INSERT INTO user_service.users (email, password_hash, role, first_name, last_name, is_active)
-     VALUES ($1, $2, $3, $4, $5, TRUE)
+    `INSERT INTO user_service.users (email, password_hash, role, first_name, last_name, is_active, verified_recruiter)
+     VALUES ($1, $2, $3, $4, $5, TRUE, $6)
      RETURNING id, email, role, first_name, last_name, created_at`,
-    [pending.email, pending.password_hash, pending.role, pending.first_name, pending.last_name]
+    [
+      pending.email,
+      pending.password_hash,
+      pending.role,
+      pending.first_name,
+      pending.last_name,
+      inferRecruiterVerification(pending.email, pending.role),
+    ]
   );
 
   const user = result.rows[0];

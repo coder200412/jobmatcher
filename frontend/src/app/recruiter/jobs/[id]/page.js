@@ -180,18 +180,67 @@ export default function ManageJobPage() {
                     {c.headline && <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>{c.headline}</p>}
                   </div>
                   <div className={`match-score ${c.matchScore > 0.7 ? 'high' : ''}`}>
-                    {Math.round(c.matchScore * 100)}% match
+                    {c.matchPercent || Math.round(c.matchScore * 100)}% match
                   </div>
                 </div>
                 <div className="flex gap-md" style={{ marginTop: 'var(--space-md)', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                   {c.location && <span>📍 {c.location}</span>}
                   <span>📊 {c.experienceYears} yrs exp</span>
                 </div>
+                <div className="flex gap-sm" style={{ marginTop: 'var(--space-sm)', flexWrap: 'wrap' }}>
+                  {c.responseProbability && (
+                    <span className="badge badge-primary">
+                      Reply probability: {c.responseProbability.percent}%
+                    </span>
+                  )}
+                  {c.activitySignal && (
+                    <span className={`badge ${c.activitySignal.level === 'high' ? 'badge-success' : c.activitySignal.level === 'medium' ? 'badge-warning' : 'badge-neutral'}`}>
+                      {c.activitySignal.label}
+                    </span>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-xs" style={{ marginTop: 'var(--space-sm)' }}>
                   {(c.skills || []).slice(0, 6).map((s, i) => (
-                    <span key={i} className="skill-tag">{s}</span>
+                    <span key={i} className="skill-tag">{typeof s === 'string' ? s : s.skillName || s.skill_name}</span>
                   ))}
                 </div>
+                {c.matchedSkills?.length > 0 && (
+                  <div style={{ marginTop: 'var(--space-md)' }}>
+                    <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                      Strong overlap
+                    </div>
+                    <div className="flex flex-wrap gap-xs">
+                      {c.matchedSkills.slice(0, 4).map((skill) => (
+                        <span key={skill} className="skill-tag" style={{ background: 'rgba(34,197,94,0.12)', borderColor: 'rgba(34,197,94,0.2)' }}>
+                          {skill}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {c.missingSkills?.length > 0 && (
+                  <div style={{ marginTop: 'var(--space-md)' }}>
+                    <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                      Gaps to probe in screening
+                    </div>
+                    <div className="flex flex-wrap gap-xs">
+                      {c.missingSkills.slice(0, 4).map((skill) => (
+                        <span key={skill} className="skill-tag" style={{ background: 'rgba(245,158,11,0.12)', borderColor: 'rgba(245,158,11,0.18)' }}>
+                          {skill}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {c.recruiterReasons?.length > 0 && (
+                  <div style={{ marginTop: 'var(--space-md)', display: 'grid', gap: '6px' }}>
+                    {c.recruiterReasons.map((reason) => (
+                      <div key={reason} style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--bg-glass)', color: 'var(--text-secondary)', fontSize: '0.88rem' }}>
+                        {reason}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>

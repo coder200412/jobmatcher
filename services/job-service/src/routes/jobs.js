@@ -4,7 +4,7 @@ const { query } = require('../db');
 const { authMiddleware, optionalAuth, requireRole } = require('../auth');
 const { publishEvent } = require('../kafka');
 const { indexJob, searchJobs, removeJob } = require('../elasticsearch');
-const { EventTypes, KafkaTopics, createEvent } = require('@jobmatch/shared');
+const { EventTypes, KafkaTopics, createEvent, analyzeJobContent, normalizeSkillEntries } = require('@jobmatch/shared');
 
 const router = express.Router();
 
@@ -28,6 +28,106 @@ const createJobSchema = z.object({
 });
 
 const updateJobSchema = createJobSchema.partial();
+const reportJobSchema = z.object({
+  reason: z.enum(['spam', 'fake_company', 'misleading_description', 'offensive_content', 'other']),
+  details: z.string().max(500).optional(),
+});
+
+function computeJobPriorityScore(job, normalizedSkills) {
+  let score = 55;
+  if ((job.salary_max || 0) >= 150000) score += 10;
+  if ((job.work_type || job.workType) === 'remote') score += 8;
+  score += Math.min((normalizedSkills || []).length * 3, 15);
+  if ((job.experience_min || 0) <= 3) score += 5;
+  return Math.max(0, Math.min(100, score));
+}
+
+function computeCandidateAlertMatch(candidate, job, normalizedSkills) {
+  const candidateSkillSet = new Set((candidate.skills || []).map((skill) => String(skill).toLowerCase()));
+  const jobSkillKeys = normalizedSkills.map((skill) => skill.key);
+  const matchedSkills = jobSkillKeys.filter((skill) => candidateSkillSet.has(skill));
+  const skillScore = jobSkillKeys.length > 0 ? matchedSkills.length / jobSkillKeys.length : 0.4;
+  const experienceScore = Number(candidate.experience_years || 0) >= Number(job.experience_min || 0) ? 1 : 0.55;
+  const locationScore = (job.work_type === 'remote' || !candidate.location || !job.location)
+    ? 0.85
+    : (String(candidate.location).toLowerCase().includes(String(job.location).toLowerCase()) ? 1 : 0.5);
+
+  return Math.round((skillScore * 0.55 + experienceScore * 0.25 + locationScore * 0.2) * 100);
+}
+
+async function distributePriorityAlerts(job, skills) {
+  const normalizedSkills = normalizeSkillEntries(skills);
+  const priorityScore = computeJobPriorityScore(job, normalizedSkills);
+
+  await query('UPDATE job_service.jobs SET priority_score = $1 WHERE id = $2', [priorityScore, job.id]);
+  if (job.status !== 'active') {
+    return;
+  }
+
+  const candidatesResult = await query(
+    `SELECT
+       u.id,
+       u.first_name,
+       u.location,
+       u.experience_years,
+       COALESCE(array_agg(s.skill_name) FILTER (WHERE s.id IS NOT NULL), '{}') AS skills,
+       COALESCE(np.min_match_score, 70) AS min_match_score,
+       COALESCE(np.only_high_priority, false) AS only_high_priority
+     FROM user_service.users u
+     LEFT JOIN user_service.user_skills s ON s.user_id = u.id
+     LEFT JOIN notification_service.notification_preferences np ON np.user_id = u.id
+     WHERE u.role = 'candidate' AND u.is_active = true
+     GROUP BY u.id, np.min_match_score, np.only_high_priority
+     LIMIT 200`
+  );
+
+  const notifications = [];
+  for (const candidate of candidatesResult.rows) {
+    const matchPercent = computeCandidateAlertMatch(candidate, job, normalizedSkills);
+    const threshold = candidate.only_high_priority ? 85 : Number(candidate.min_match_score || 70);
+    if (matchPercent < threshold) continue;
+
+    notifications.push({
+      userId: candidate.id,
+      type: 'new_job_match',
+      title: matchPercent >= 85 ? '🔥 High match job alert' : '🎯 New job match',
+      message: `${job.title} at ${job.company} looks like a ${matchPercent}% match for you. ${matchPercent >= 85 ? 'Apply within 24 hours.' : 'Take a look when you can.'}`,
+      data: {
+        jobId: job.id,
+        matchPercent,
+        priorityScore,
+      },
+    });
+  }
+
+  for (const notification of notifications.slice(0, 25)) {
+    await query(
+      `INSERT INTO notification_service.notifications (user_id, type, title, message, data)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [notification.userId, notification.type, notification.title, notification.message, JSON.stringify(notification.data)]
+    );
+  }
+}
+
+function buildCredibility(row) {
+  const reportCount = Number(row.report_count || 0);
+  const verifiedRecruiter = Boolean(row.recruiter_verified);
+  let score = 78;
+
+  if (verifiedRecruiter) score += 12;
+  if (row.salary_min || row.salary_max) score += 4;
+  if ((row.skills || []).length >= 3) score += 3;
+  score -= Math.min(reportCount * 12, 40);
+
+  const bounded = Math.max(0, Math.min(100, score));
+
+  return {
+    score: bounded,
+    label: bounded >= 85 ? 'Trusted' : bounded >= 65 ? 'Promising' : bounded >= 45 ? 'Needs review' : 'Caution',
+    reportCount,
+    verifiedRecruiter,
+  };
+}
 
 // ── GET /api/jobs — Search & List ─────────────────────
 router.get('/', optionalAuth, async (req, res, next) => {
@@ -47,11 +147,19 @@ router.get('/', optionalAuth, async (req, res, next) => {
 
     // Fallback to PostgreSQL
     let sql = `
-      SELECT j.*, 
+      SELECT j.*,
         COALESCE(json_agg(json_build_object('skillName', s.skill_name, 'isRequired', s.is_required))
-          FILTER (WHERE s.id IS NOT NULL), '[]') AS skills
+          FILTER (WHERE s.id IS NOT NULL), '[]') AS skills,
+        COALESCE(rc.report_count, 0) AS report_count,
+        COALESCE(u.verified_recruiter, false) AS recruiter_verified
       FROM job_service.jobs j
       LEFT JOIN job_service.job_skills s ON j.id = s.job_id
+      LEFT JOIN (
+        SELECT job_id, COUNT(*)::int AS report_count
+        FROM job_service.job_reports
+        GROUP BY job_id
+      ) rc ON rc.job_id = j.id
+      LEFT JOIN user_service.users u ON u.id = j.recruiter_id
       WHERE j.status = 'active'
     `;
     const params = [];
@@ -83,7 +191,7 @@ router.get('/', optionalAuth, async (req, res, next) => {
       paramIdx++;
     }
 
-    sql += ` GROUP BY j.id ORDER BY j.created_at DESC LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`;
+    sql += ` GROUP BY j.id, rc.report_count, u.verified_recruiter ORDER BY j.priority_score DESC, j.created_at DESC LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`;
     params.push(parseInt(limit), (parseInt(page) - 1) * parseInt(limit));
 
     const result = await query(sql, params);
@@ -109,11 +217,19 @@ router.get('/recruiter/mine', authMiddleware, requireRole('recruiter', 'admin'),
     const result = await query(
       `SELECT j.*,
         COALESCE(json_agg(json_build_object('skillName', s.skill_name, 'isRequired', s.is_required))
-          FILTER (WHERE s.id IS NOT NULL), '[]') AS skills
+          FILTER (WHERE s.id IS NOT NULL), '[]') AS skills,
+        COALESCE(rc.report_count, 0) AS report_count,
+        COALESCE(u.verified_recruiter, false) AS recruiter_verified
        FROM job_service.jobs j
        LEFT JOIN job_service.job_skills s ON j.id = s.job_id
+       LEFT JOIN (
+         SELECT job_id, COUNT(*)::int AS report_count
+         FROM job_service.job_reports
+         GROUP BY job_id
+       ) rc ON rc.job_id = j.id
+       LEFT JOIN user_service.users u ON u.id = j.recruiter_id
        WHERE j.recruiter_id = $1
-       GROUP BY j.id
+       GROUP BY j.id, rc.report_count, u.verified_recruiter
        ORDER BY j.created_at DESC`,
       [req.user.id]
     );
@@ -129,11 +245,19 @@ router.get('/:id', optionalAuth, async (req, res, next) => {
     const result = await query(
       `SELECT j.*, 
         COALESCE(json_agg(json_build_object('skillName', s.skill_name, 'isRequired', s.is_required))
-          FILTER (WHERE s.id IS NOT NULL), '[]') AS skills
+          FILTER (WHERE s.id IS NOT NULL), '[]') AS skills,
+        COALESCE(rc.report_count, 0) AS report_count,
+        COALESCE(u.verified_recruiter, false) AS recruiter_verified
        FROM job_service.jobs j
        LEFT JOIN job_service.job_skills s ON j.id = s.job_id
+       LEFT JOIN (
+         SELECT job_id, COUNT(*)::int AS report_count
+         FROM job_service.job_reports
+         GROUP BY job_id
+       ) rc ON rc.job_id = j.id
+       LEFT JOIN user_service.users u ON u.id = j.recruiter_id
        WHERE j.id = $1
-       GROUP BY j.id`,
+       GROUP BY j.id, rc.report_count, u.verified_recruiter`,
       [req.params.id]
     );
 
@@ -170,6 +294,7 @@ router.post('/', authMiddleware, requireRole('recruiter', 'admin'), async (req, 
     );
 
     const job = result.rows[0];
+    job.priority_score = computeJobPriorityScore(job, normalizeSkillEntries(data.skills || []));
 
     // Insert skills
     if (data.skills && data.skills.length > 0) {
@@ -188,6 +313,8 @@ router.post('/', authMiddleware, requireRole('recruiter', 'admin'), async (req, 
       ...job,
       skills: (data.skills || []).map(s => s.skillName),
     });
+
+    await distributePriorityAlerts(job, data.skills || []);
 
     // Publish event
     const event = createEvent(EventTypes.JOB_CREATED, {
@@ -264,7 +391,13 @@ router.put('/:id', authMiddleware, requireRole('recruiter', 'admin'), async (req
     }
 
     const job = result.rows[0];
-    await indexJob({ ...job, skills: (data.skills || []).map(s => s.skillName) });
+    const currentSkills = data.skills || (await query(
+      'SELECT skill_name AS "skillName", is_required AS "isRequired" FROM job_service.job_skills WHERE job_id = $1',
+      [req.params.id]
+    )).rows;
+    job.priority_score = computeJobPriorityScore(job, normalizeSkillEntries(currentSkills));
+    await indexJob({ ...job, skills: currentSkills.map(s => s.skillName) });
+    await distributePriorityAlerts(job, currentSkills);
 
     const event = createEvent(EventTypes.JOB_UPDATED, { jobId: job.id, changes: data }, { source: 'job-service' });
     await publishEvent(KafkaTopics.JOB_EVENTS, event);
@@ -272,6 +405,67 @@ router.put('/:id', authMiddleware, requireRole('recruiter', 'admin'), async (req
     res.json(formatJob(job));
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: 'Validation failed', details: err.errors });
+    next(err);
+  }
+});
+
+router.post('/:id/report', authMiddleware, async (req, res, next) => {
+  try {
+    const data = reportJobSchema.parse(req.body);
+
+    const jobResult = await query(
+      `SELECT j.*,
+              COALESCE(rc.report_count, 0) AS report_count,
+              COALESCE(u.verified_recruiter, false) AS recruiter_verified,
+              COALESCE(
+                json_agg(json_build_object('skillName', s.skill_name, 'isRequired', s.is_required))
+                FILTER (WHERE s.id IS NOT NULL),
+                '[]'
+              ) AS skills
+       FROM job_service.jobs j
+       LEFT JOIN (
+         SELECT job_id, COUNT(*)::int AS report_count
+         FROM job_service.job_reports
+         GROUP BY job_id
+       ) rc ON rc.job_id = j.id
+       LEFT JOIN user_service.users u ON u.id = j.recruiter_id
+       LEFT JOIN job_service.job_skills s ON s.job_id = j.id
+       WHERE j.id = $1
+       GROUP BY j.id, rc.report_count, u.verified_recruiter`,
+      [req.params.id]
+    );
+
+    if (jobResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    await query(
+      `INSERT INTO job_service.job_reports (job_id, reporter_id, reason, details)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (job_id, reporter_id) DO UPDATE SET
+         reason = EXCLUDED.reason,
+         details = EXCLUDED.details`,
+      [req.params.id, req.user.id, data.reason, data.details || null]
+    );
+
+    const reportCountResult = await query(
+      'SELECT COUNT(*)::int AS total FROM job_service.job_reports WHERE job_id = $1',
+      [req.params.id]
+    );
+
+    const credibility = buildCredibility({
+      ...jobResult.rows[0],
+      report_count: reportCountResult.rows[0]?.total || 0,
+    });
+
+    res.status(201).json({
+      message: 'Thanks for reporting this job. Our trust layer has been updated.',
+      credibility,
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Validation failed', details: err.errors });
+    }
     next(err);
   }
 });
@@ -298,6 +492,15 @@ router.delete('/:id', authMiddleware, requireRole('recruiter', 'admin'), async (
 });
 
 function formatJob(row) {
+  const normalizedSkills = row.skills || [];
+  const jobInsights = analyzeJobContent({
+    title: row.title,
+    description: row.description,
+    skills: normalizedSkills,
+    experienceMin: row.experience_min,
+    experienceMax: row.experience_max,
+  });
+
   return {
     id: row.id,
     recruiterId: row.recruiter_id,
@@ -314,7 +517,13 @@ function formatJob(row) {
     status: row.status,
     viewsCount: row.views_count,
     applicationsCount: row.applications_count,
-    skills: row.skills || [],
+    skills: normalizedSkills,
+    jobInsights,
+    priorityScore: row.priority_score || 0,
+    credibility: buildCredibility({
+      ...row,
+      skills: normalizedSkills,
+    }),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.score !== undefined && { score: row.score }),

@@ -100,6 +100,12 @@ export default function NotificationsPage() {
                     </span>
                   </div>
                   <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '4px' }}>{n.message}</p>
+                  {n.data?.matchPercent ? (
+                    <div className="flex gap-xs" style={{ marginTop: '8px', flexWrap: 'wrap' }}>
+                      <span className="badge badge-primary">{n.data.matchPercent}% match</span>
+                      {n.data.priorityScore ? <span className="badge badge-neutral">Priority {n.data.priorityScore}</span> : null}
+                    </div>
+                  ) : null}
                 </div>
                 {!n.isRead && (
                   <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent-1)', flexShrink: 0, marginTop: '6px' }} />

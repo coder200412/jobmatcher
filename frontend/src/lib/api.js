@@ -178,6 +178,8 @@ class ApiClient {
   getProfile() { return this.request('/users/me'); }
   updateProfile(data) { return this.request('/users/me', { method: 'PUT', body: JSON.stringify(data) }); }
   updateSkills(skills) { return this.request('/users/me/skills', { method: 'PUT', body: JSON.stringify({ skills }) }); }
+  analyzeResume(data) { return this.request('/users/me/resume-analysis', { method: 'POST', body: JSON.stringify(data) }); }
+  getCareerTrajectory() { return this.request('/users/me/career-trajectory'); }
   getUser(id) { return this.request(`/users/${id}`); }
 
   // Jobs
@@ -186,6 +188,7 @@ class ApiClient {
     return this.request(`/jobs?${qs}`);
   }
   getJob(id) { return this.request(`/jobs/${id}`); }
+  reportJob(id, data) { return this.request(`/jobs/${id}/report`, { method: 'POST', body: JSON.stringify(data) }); }
   createJob(data) { return this.request('/jobs', { method: 'POST', body: JSON.stringify(data) }); }
   updateJob(id, data) { return this.request(`/jobs/${id}`, { method: 'PUT', body: JSON.stringify(data) }); }
   deleteJob(id) { return this.request(`/jobs/${id}`, { method: 'DELETE' }); }
@@ -201,7 +204,12 @@ class ApiClient {
 
   // Recommendations
   getJobRecommendations(limit = 20) { return this.request(`/recommendations/jobs?limit=${limit}`); }
+  getJobMatchAnalysis(jobId) { return this.request(`/recommendations/jobs/${jobId}/analysis`); }
   getCandidateRecommendations(jobId, limit = 20) { return this.request(`/recommendations/candidates/${jobId}?limit=${limit}`); }
+  submitRecommendationFeedback(jobId, action) { return this.request('/recommendations/feedback', { method: 'POST', body: JSON.stringify({ jobId, action }) }); }
+  getReferralMatches(jobId, limit = 5) { return this.request(`/recommendations/referrals/${jobId}?limit=${limit}`); }
+  getCareerInsights() { return this.request('/recommendations/career-path'); }
+  getRecommendationExperimentSummary() { return this.request('/recommendations/experiments/summary'); }
 
   // Notifications
   getNotifications(params = {}) {

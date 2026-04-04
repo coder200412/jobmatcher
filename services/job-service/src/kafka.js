@@ -1,5 +1,5 @@
 const { Kafka, Partitioners, logLevel } = require('kafkajs');
-const { getKafkaBrokers, isKafkaEnabled } = require('@jobmatch/shared');
+const { getKafkaBrokers, isKafkaEnabled, handleLocalEvent } = require('@jobmatch/shared');
 
 const kafkaEnabled = isKafkaEnabled();
 const kafka = kafkaEnabled ? new Kafka({
@@ -38,6 +38,7 @@ async function connectKafkaProducer() {
 async function publishEvent(topic, event) {
   if (!isConnected) {
     console.log(`[KAFKA-MOCK] Topic: ${topic} | ${event.type}`);
+    await handleLocalEvent(event);
     return;
   }
   try {
@@ -48,6 +49,7 @@ async function publishEvent(topic, event) {
     console.log(`[KAFKA] Published to ${topic}: ${event.type}`);
   } catch (err) {
     console.error(`[KAFKA] Failed to publish to ${topic}:`, err.message);
+    await handleLocalEvent(event);
   }
 }
 

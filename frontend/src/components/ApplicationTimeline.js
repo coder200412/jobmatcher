@@ -7,6 +7,9 @@ const EVENT_STYLES = {
   rejected: { icon: '!', accent: 'var(--error)' },
   hired: { icon: '*', accent: 'var(--success)' },
   note: { icon: 'i', accent: 'var(--text-accent)' },
+  round_pending: { icon: 'R', accent: 'var(--text-accent)' },
+  round_cleared: { icon: 'C', accent: 'var(--success)' },
+  round_not_cleared: { icon: 'X', accent: 'var(--error)' },
 };
 
 function formatTimestamp(value) {

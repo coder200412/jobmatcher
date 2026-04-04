@@ -17,7 +17,7 @@ export default function PostJobPage() {
   const [form, setForm] = useState({
     title: '', company: '', description: '', location: '', workType: 'onsite',
     salaryMin: '', salaryMax: '', currency: 'USD', experienceMin: '0', experienceMax: '',
-    status: 'active',
+    positionsCount: '1', status: 'active',
   });
   const [selectedSkills, setSelectedSkills] = useState([]);
   const [error, setError] = useState('');
@@ -42,6 +42,7 @@ export default function PostJobPage() {
         salaryMax: form.salaryMax ? parseInt(form.salaryMax) : undefined,
         experienceMin: parseInt(form.experienceMin),
         experienceMax: form.experienceMax ? parseInt(form.experienceMax) : undefined,
+        positionsCount: Math.max(1, parseInt(form.positionsCount || '1')),
         skills: selectedSkills,
       };
       await api.createJob(data);
@@ -147,6 +148,21 @@ export default function PostJobPage() {
                 <input type="number" className="form-input" placeholder="10"
                   value={form.experienceMax} onChange={e => setForm({...form, experienceMax: e.target.value})} />
               </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Number of Positions</label>
+              <input
+                type="number"
+                className="form-input"
+                min="1"
+                placeholder="1"
+                value={form.positionsCount}
+                onChange={e => setForm({ ...form, positionsCount: e.target.value })}
+              />
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginTop: '6px' }}>
+                The job will automatically close and disappear from job seeker listings once this many applications are received.
+              </p>
             </div>
           </div>
 

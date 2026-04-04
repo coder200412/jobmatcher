@@ -155,9 +155,11 @@ export default function JobsPageClient() {
                 {(job.experienceMin !== undefined || job.experience_min !== undefined) && (
                   <span>📊 {job.experienceMin || job.experience_min}–{job.experienceMax || job.experience_max || '10'}+ yrs</span>
                 )}
+                <span>👥 {job.positionsRemaining ?? Math.max(0, (job.positionsCount || 1) - (job.applicationsCount || 0))} spots left</span>
               </div>
 
               <div className="flex gap-xs" style={{ marginBottom: 'var(--space-sm)', flexWrap: 'wrap' }}>
+                <span className="badge badge-neutral">👥 {job.positionsCount || 1} positions</span>
                 {(job.priorityScore || job.priority_score) ? (
                   <span className="badge badge-primary">🔥 Priority {job.priorityScore || job.priority_score}</span>
                 ) : null}

@@ -67,7 +67,7 @@ function getVerificationMessage(email, delivery) {
   return 'Email sending is configured, but the confirmation email could not be delivered from the server. Check the user-service deployment logs for the exact SMTP error and verify the Gmail or SMTP credentials.';
 }
 
-function buildLoginRedirect(email, verified, message) {
+function buildLoginRedirect(email, verified, message, provider = 'local') {
   const frontendUrl =
     process.env.PUBLIC_FRONTEND_URL ||
     process.env.FRONTEND_URL ||
@@ -79,6 +79,10 @@ function buildLoginRedirect(email, verified, message) {
 
   if (message) {
     qs.set('message', message);
+  }
+
+  if (provider) {
+    qs.set('provider', provider);
   }
 
   return `${frontendUrl}/auth/login?${qs.toString()}`;
@@ -182,16 +186,20 @@ async function completeVerification(client, email, token) {
   }
 
   const result = await client.query(
-    `INSERT INTO user_service.users (email, password_hash, role, first_name, last_name, is_active, verified_recruiter)
-     VALUES ($1, $2, $3, $4, $5, TRUE, $6)
-     RETURNING id, email, role, first_name, last_name, created_at`,
+    `INSERT INTO user_service.users
+      (email, password_hash, role, first_name, last_name, avatar_url, is_active, verified_recruiter, google_id, auth_provider)
+     VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8, $9)
+     RETURNING id, email, role, first_name, last_name, avatar_url, auth_provider, created_at`,
     [
       pending.email,
       pending.password_hash,
       pending.role,
       pending.first_name,
       pending.last_name,
+      pending.avatar_url || null,
       inferRecruiterVerification(pending.email, pending.role),
+      pending.google_id || null,
+      pending.auth_provider || 'local',
     ]
   );
 
@@ -297,7 +305,10 @@ router.get('/verify-email', async (req, res) => {
     const email = normalizeEmail(rawEmail);
     const user = await completeVerification(client, email, token);
     await publishUserRegistered(user);
-    return res.redirect(buildLoginRedirect(email, true, 'Your email has been confirmed. Sign in with the same credentials you used when registering.'));
+    const successMessage = user.auth_provider === 'google'
+      ? 'Your email has been confirmed. Continue with Google on the login page to access your account.'
+      : 'Your email has been confirmed. Sign in with the same credentials you used when registering.';
+    return res.redirect(buildLoginRedirect(email, true, successMessage, user.auth_provider || 'local'));
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     const parsedEmail = typeof req.query.email === 'string' ? normalizeEmail(req.query.email) : '';
@@ -353,6 +364,49 @@ router.post('/resend-code', async (req, res, next) => {
   }
 });
 
+router.post('/google/register', async (req, res, next) => {
+  try {
+    const { credential, role = 'candidate' } = googleAuthSchema.parse(req.body);
+    const googleProfile = await verifyGoogleCredential(credential);
+    const email = normalizeEmail(googleProfile.email);
+
+    const existing = await query('SELECT id FROM user_service.users WHERE email = $1', [email]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'Email already registered. Use Google sign-in on the login page.' });
+    }
+
+    const derivedName = splitDisplayName(googleProfile.name);
+    const firstName = googleProfile.given_name || derivedName.firstName;
+    const lastName = googleProfile.family_name || derivedName.lastName;
+    const token = generateVerificationToken();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await query('DELETE FROM user_service.verification_codes WHERE email = $1', [email]);
+    await query(
+      `INSERT INTO user_service.verification_codes
+        (email, code, first_name, last_name, password_hash, role, google_id, auth_provider, avatar_url, expires_at)
+       VALUES ($1, $2, $3, $4, NULL, $5, $6, 'google', $7, $8)`,
+      [email, token, firstName, lastName, role, googleProfile.sub, googleProfile.picture || null, expiresAt]
+    );
+
+    const confirmationUrl = buildVerificationUrl(email, token);
+    const delivery = await sendVerificationEmail(email, firstName, confirmationUrl);
+
+    return res.status(200).json({
+      requiresVerification: true,
+      provider: 'google',
+      email,
+      message: getVerificationMessage(email, delivery),
+      deliveryMethod: delivery.transport,
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Validation failed', details: err.issues });
+    }
+    next(err);
+  }
+});
+
 router.post('/google', async (req, res, next) => {
   try {
     const { credential, role = 'candidate' } = googleAuthSchema.parse(req.body);
@@ -367,56 +421,42 @@ router.post('/google', async (req, res, next) => {
     );
 
     let user = existingResult.rows[0];
-    let created = false;
 
     if (!user) {
-      const derivedName = splitDisplayName(googleProfile.name);
-      const firstName = googleProfile.given_name || derivedName.firstName;
-      const lastName = googleProfile.family_name || derivedName.lastName;
-      const result = await query(
-        `INSERT INTO user_service.users (
-           email, password_hash, role, first_name, last_name, avatar_url, is_active,
-           verified_recruiter, google_id, auth_provider
-         )
-         VALUES ($1, NULL, $2, $3, $4, $5, TRUE, $6, $7, 'google')
-         RETURNING id, email, role, first_name, last_name, is_active, avatar_url`,
-        [
-          email,
-          role,
-          firstName,
-          lastName,
-          googleProfile.picture || null,
-          inferRecruiterVerification(email, role),
-          googleProfile.sub,
-        ]
+      const pending = await query(
+        `SELECT id
+         FROM user_service.verification_codes
+         WHERE email = $1 AND used = FALSE AND expires_at > NOW()
+         ORDER BY created_at DESC LIMIT 1`,
+        [email]
       );
 
-      user = result.rows[0];
-      created = true;
-
-      await query('DELETE FROM user_service.verification_codes WHERE email = $1', [email]);
-      await publishUserRegistered(user);
-    } else {
-      if (!user.is_active) {
-        return res.status(403).json({ error: 'Account is deactivated' });
+      if (pending.rows.length > 0) {
+        return res.status(403).json({ error: 'Please confirm your email before signing in with Google.' });
       }
 
-      if (!user.google_id || !user.avatar_url) {
-        const updated = await query(
-          `UPDATE user_service.users
-           SET google_id = COALESCE(google_id, $1),
-               avatar_url = COALESCE(avatar_url, $2),
-               auth_provider = CASE
-                 WHEN password_hash IS NULL OR password_hash = '' THEN 'google'
-                 ELSE auth_provider
-               END,
-               updated_at = NOW()
-           WHERE id = $3
-           RETURNING id, email, role, first_name, last_name, is_active, avatar_url`,
-          [googleProfile.sub, googleProfile.picture || null, user.id]
-        );
-        user = updated.rows[0];
-      }
+      return res.status(404).json({ error: 'No Google account is registered with this email yet. Use Create Account with Google first.' });
+    }
+
+    if (!user.is_active) {
+      return res.status(403).json({ error: 'Account is deactivated' });
+    }
+
+    if (!user.google_id || !user.avatar_url) {
+      const updated = await query(
+        `UPDATE user_service.users
+         SET google_id = COALESCE(google_id, $1),
+             avatar_url = COALESCE(avatar_url, $2),
+             auth_provider = CASE
+               WHEN password_hash IS NULL OR password_hash = '' THEN 'google'
+               ELSE auth_provider
+             END,
+             updated_at = NOW()
+         WHERE id = $3
+         RETURNING id, email, role, first_name, last_name, is_active, avatar_url`,
+        [googleProfile.sub, googleProfile.picture || null, user.id]
+      );
+      user = updated.rows[0];
     }
 
     const tokens = generateTokens(user);
@@ -430,7 +470,6 @@ router.post('/google', async (req, res, next) => {
         lastName: user.last_name,
         avatarUrl: user.avatar_url,
       },
-      created,
       ...tokens,
     });
   } catch (err) {

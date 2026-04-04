@@ -12,6 +12,7 @@ export default function LoginPageClient() {
   const searchParams = useSearchParams();
   const verified = searchParams.get('verified');
   const verificationMessage = searchParams.get('message');
+  const provider = searchParams.get('provider');
   const [form, setForm] = useState({
     email: '',
     password: '',
@@ -72,7 +73,9 @@ export default function LoginPageClient() {
 
         {!error && verified === '1' && (
           <div style={{ padding: '10px 14px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 'var(--radius-md)', color: 'var(--success)', fontSize: '0.85rem', marginBottom: 'var(--space-md)' }}>
-            {verificationMessage || 'Email confirmed. You can now sign in with the same credentials you used during registration.'}
+            {verificationMessage || (provider === 'google'
+              ? 'Email confirmed. Continue with Google to access your account.'
+              : 'Email confirmed. You can now sign in with the same credentials you used during registration.')}
           </div>
         )}
 

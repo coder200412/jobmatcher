@@ -2,20 +2,17 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import GoogleAuthButton from '@/components/GoogleAuthButton';
 import api from '@/lib/api';
-import { useAuth } from '@/lib/auth-context';
 
 export default function RegisterPage() {
-  const router = useRouter();
-  const { authenticateWithGoogle } = useAuth();
   const [step, setStep] = useState('register'); // 'register' | 'check-email'
   const [form, setForm] = useState({ email: '', password: '', firstName: '', lastName: '', role: 'candidate' });
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [registerProvider, setRegisterProvider] = useState('local');
 
   const handleRegister = async (e) => {
     e.preventDefault();
@@ -27,6 +24,7 @@ export default function RegisterPage() {
       if (result.requiresVerification) {
         setStep('check-email');
         setMessage(result.message);
+        setRegisterProvider(result.provider || 'local');
       }
     } catch (err) {
       setError(err.message);
@@ -52,8 +50,13 @@ export default function RegisterPage() {
     setGoogleLoading(true);
 
     try {
-      const result = await authenticateWithGoogle(credential, role);
-      router.push(result.user.role === 'recruiter' ? '/recruiter' : '/dashboard');
+      const result = await api.googleRegister({ credential, role });
+      if (result.requiresVerification) {
+        setForm((current) => ({ ...current, email: result.email || current.email }));
+        setRegisterProvider(result.provider || 'google');
+        setStep('check-email');
+        setMessage(result.message);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -171,7 +174,9 @@ export default function RegisterPage() {
                 Click the <strong>Confirm Email</strong> button inside the email to activate your account.
               </p>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                After confirming, sign in with the same email and password you used while registering.
+                {registerProvider === 'google'
+                  ? 'After confirming, use Continue with Google on the login page to access your account.'
+                  : 'After confirming, sign in with the same email and password you used while registering.'}
               </p>
             </div>
 

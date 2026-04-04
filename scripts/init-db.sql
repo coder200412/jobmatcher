@@ -52,15 +52,22 @@ CREATE TABLE IF NOT EXISTS user_service.verification_codes (
     code VARCHAR(255) NOT NULL,
     first_name VARCHAR(100) NOT NULL,
     last_name VARCHAR(100) NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255),
     role VARCHAR(20) DEFAULT 'candidate' CHECK (role IN ('candidate', 'recruiter', 'admin')),
+    google_id VARCHAR(255),
+    auth_provider VARCHAR(20) DEFAULT 'local',
+    avatar_url VARCHAR(500),
     expires_at TIMESTAMPTZ NOT NULL,
     used BOOLEAN DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 ALTER TABLE IF EXISTS user_service.verification_codes
-ALTER COLUMN code TYPE VARCHAR(255);
+ALTER COLUMN code TYPE VARCHAR(255),
+ALTER COLUMN password_hash DROP NOT NULL,
+ADD COLUMN IF NOT EXISTS google_id VARCHAR(255),
+ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) DEFAULT 'local',
+ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(500);
 
 CREATE TABLE IF NOT EXISTS user_service.user_skills (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

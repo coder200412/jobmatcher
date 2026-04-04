@@ -181,6 +181,13 @@ class ApiClient {
     return result;
   }
 
+  async googleRegister(data) {
+    return this.request('/auth/google/register', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   logout() {
     this.clearTokens();
   }

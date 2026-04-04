@@ -1,15 +1,17 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import ResumeAnalyzerCard from '@/components/ResumeAnalyzerCard';
 
 export default function CandidateDashboard() {
   const { user } = useAuth();
   const [applications, setApplications] = useState([]);
   const [recommendations, setRecommendations] = useState([]);
   const [careerInsights, setCareerInsights] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -17,12 +19,38 @@ export default function CandidateDashboard() {
       api.getMyApplications().catch(() => ({ applications: [] })),
       api.getJobRecommendations(6).catch(() => ({ recommendations: [] })),
       api.getCareerInsights().catch(() => null),
-    ]).then(([appsData, recsData, careerData]) => {
+      api.getProfile().catch(() => null),
+    ]).then(([appsData, recsData, careerData, profileData]) => {
       setApplications(appsData.applications || []);
       setRecommendations(recsData.recommendations || []);
       setCareerInsights(careerData);
+      setProfile(profileData);
     }).finally(() => setLoading(false));
   }, []);
+
+  const resumeAnalyzerJobs = useMemo(() => {
+    const jobs = new Map();
+
+    for (const recommendation of recommendations) {
+      if (!recommendation?.id || jobs.has(recommendation.id)) continue;
+      jobs.set(recommendation.id, {
+        id: recommendation.id,
+        title: recommendation.title,
+        company: recommendation.company,
+      });
+    }
+
+    for (const application of applications) {
+      if (!application?.jobId || jobs.has(application.jobId)) continue;
+      jobs.set(application.jobId, {
+        id: application.jobId,
+        title: application.jobTitle,
+        company: application.jobCompany,
+      });
+    }
+
+    return Array.from(jobs.values());
+  }, [applications, recommendations]);
 
   const statusColors = {
     submitted: 'badge-info',
@@ -65,6 +93,15 @@ export default function CandidateDashboard() {
             <div className="stat-card-label">{stat.label}</div>
           </div>
         ))}
+      </div>
+
+      <div style={{ marginBottom: 'var(--space-2xl)' }}>
+        <ResumeAnalyzerCard
+          title="Precise Resume Analyzer"
+          subtitle="Choose a target job and compare your resume against the exact skills, keywords, and experience that role expects."
+          jobs={resumeAnalyzerJobs}
+          initialResumeText={profile?.resumeText || ''}
+        />
       </div>
 
       {/* Recent Applications */}

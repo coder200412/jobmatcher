@@ -42,71 +42,13 @@ function computeJobPriorityScore(job, normalizedSkills) {
   return Math.max(0, Math.min(100, score));
 }
 
-function computeCandidateAlertMatch(candidate, job, normalizedSkills) {
-  const candidateSkillSet = new Set((candidate.skills || []).map((skill) => String(skill).toLowerCase()));
-  const jobSkillKeys = normalizedSkills.map((skill) => skill.key);
-  const matchedSkills = jobSkillKeys.filter((skill) => candidateSkillSet.has(skill));
-  const skillScore = jobSkillKeys.length > 0 ? matchedSkills.length / jobSkillKeys.length : 0.4;
-  const experienceScore = Number(candidate.experience_years || 0) >= Number(job.experience_min || 0) ? 1 : 0.55;
-  const locationScore = (job.work_type === 'remote' || !candidate.location || !job.location)
-    ? 0.85
-    : (String(candidate.location).toLowerCase().includes(String(job.location).toLowerCase()) ? 1 : 0.5);
-
-  return Math.round((skillScore * 0.55 + experienceScore * 0.25 + locationScore * 0.2) * 100);
-}
-
-async function distributePriorityAlerts(job, skills) {
+async function persistPriorityScore(job, skills) {
   const normalizedSkills = normalizeSkillEntries(skills);
   const priorityScore = computeJobPriorityScore(job, normalizedSkills);
 
   await query('UPDATE job_service.jobs SET priority_score = $1 WHERE id = $2', [priorityScore, job.id]);
-  if (job.status !== 'active') {
-    return;
-  }
 
-  const candidatesResult = await query(
-    `SELECT
-       u.id,
-       u.first_name,
-       u.location,
-       u.experience_years,
-       COALESCE(array_agg(s.skill_name) FILTER (WHERE s.id IS NOT NULL), '{}') AS skills,
-       COALESCE(np.min_match_score, 70) AS min_match_score,
-       COALESCE(np.only_high_priority, false) AS only_high_priority
-     FROM user_service.users u
-     LEFT JOIN user_service.user_skills s ON s.user_id = u.id
-     LEFT JOIN notification_service.notification_preferences np ON np.user_id = u.id
-     WHERE u.role = 'candidate' AND u.is_active = true
-     GROUP BY u.id, np.min_match_score, np.only_high_priority
-     LIMIT 200`
-  );
-
-  const notifications = [];
-  for (const candidate of candidatesResult.rows) {
-    const matchPercent = computeCandidateAlertMatch(candidate, job, normalizedSkills);
-    const threshold = candidate.only_high_priority ? 85 : Number(candidate.min_match_score || 70);
-    if (matchPercent < threshold) continue;
-
-    notifications.push({
-      userId: candidate.id,
-      type: 'new_job_match',
-      title: matchPercent >= 85 ? '🔥 High match job alert' : '🎯 New job match',
-      message: `${job.title} at ${job.company} looks like a ${matchPercent}% match for you. ${matchPercent >= 85 ? 'Apply within 24 hours.' : 'Take a look when you can.'}`,
-      data: {
-        jobId: job.id,
-        matchPercent,
-        priorityScore,
-      },
-    });
-  }
-
-  for (const notification of notifications.slice(0, 25)) {
-    await query(
-      `INSERT INTO notification_service.notifications (user_id, type, title, message, data)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [notification.userId, notification.type, notification.title, notification.message, JSON.stringify(notification.data)]
-    );
-  }
+  return priorityScore;
 }
 
 function buildCredibility(row) {
@@ -314,7 +256,7 @@ router.post('/', authMiddleware, requireRole('recruiter', 'admin'), async (req, 
       skills: (data.skills || []).map(s => s.skillName),
     });
 
-    await distributePriorityAlerts(job, data.skills || []);
+    const priorityScore = await persistPriorityScore(job, data.skills || []);
 
     // Publish event
     const event = createEvent(EventTypes.JOB_CREATED, {
@@ -325,10 +267,12 @@ router.post('/', authMiddleware, requireRole('recruiter', 'admin'), async (req, 
       skills: (data.skills || []).map(s => s.skillName),
       workType: job.work_type,
       location: job.location,
+      experienceMin: job.experience_min,
+      priorityScore,
     }, { source: 'job-service' });
     await publishEvent(KafkaTopics.JOB_EVENTS, event);
 
-    res.status(201).json(formatJob({ ...job, skills: data.skills || [] }));
+    res.status(201).json(formatJob({ ...job, priority_score: priorityScore, skills: data.skills || [] }));
   } catch (err) {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation failed', details: err.errors });
@@ -397,12 +341,23 @@ router.put('/:id', authMiddleware, requireRole('recruiter', 'admin'), async (req
     )).rows;
     job.priority_score = computeJobPriorityScore(job, normalizeSkillEntries(currentSkills));
     await indexJob({ ...job, skills: currentSkills.map(s => s.skillName) });
-    await distributePriorityAlerts(job, currentSkills);
+    const priorityScore = await persistPriorityScore(job, currentSkills);
 
-    const event = createEvent(EventTypes.JOB_UPDATED, { jobId: job.id, changes: data }, { source: 'job-service' });
+    const event = createEvent(EventTypes.JOB_UPDATED, {
+      jobId: job.id,
+      recruiterId: job.recruiter_id,
+      title: job.title,
+      company: job.company,
+      skills: currentSkills.map((skill) => skill.skillName),
+      workType: job.work_type,
+      location: job.location,
+      experienceMin: job.experience_min,
+      priorityScore,
+      changes: data,
+    }, { source: 'job-service' });
     await publishEvent(KafkaTopics.JOB_EVENTS, event);
 
-    res.json(formatJob(job));
+    res.json(formatJob({ ...job, priority_score: priorityScore }));
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: 'Validation failed', details: err.errors });
     next(err);

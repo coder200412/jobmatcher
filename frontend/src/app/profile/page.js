@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import api from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import ResumeAnalyzerCard from '@/components/ResumeAnalyzerCard';
 
 const COMMON_SKILLS = [
   'JavaScript', 'TypeScript', 'Python', 'Java', 'C++', 'Go', 'Rust', 'React', 'Angular', 'Vue.js',
@@ -19,17 +20,13 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savingSkills, setSavingSkills] = useState(false);
-  const [analyzingResume, setAnalyzingResume] = useState(false);
   const [message, setMessage] = useState('');
-  const [resumeText, setResumeText] = useState('');
-  const [resumeAnalysis, setResumeAnalysis] = useState(null);
   const [careerTrajectory, setCareerTrajectory] = useState(null);
 
   useEffect(() => {
     api.getProfile()
       .then(data => {
         setProfile(data);
-        setResumeText(data?.resumeText || '');
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -88,32 +85,6 @@ export default function ProfilePage() {
       setMessage(`Error: ${err.message}`);
     } finally {
       setSavingSkills(false);
-    }
-  };
-
-  const handleResumeFile = async (file) => {
-    if (!file) return;
-    const text = await file.text().catch(() => '');
-    if (text) {
-      setResumeText(text.slice(0, 25000));
-    }
-  };
-
-  const analyzeResume = async () => {
-    if (!resumeText.trim()) {
-      setMessage('Error: Add resume text or upload a text-based resume first.');
-      return;
-    }
-
-    setAnalyzingResume(true);
-    try {
-      const result = await api.analyzeResume({ resumeText });
-      setResumeAnalysis(result);
-      setMessage('Resume analyzed successfully! ✅');
-    } catch (err) {
-      setMessage(`Error: ${err.message}`);
-    } finally {
-      setAnalyzingResume(false);
     }
   };
 
@@ -260,64 +231,11 @@ export default function ProfilePage() {
           </div>
 
           <div className="glass-card" style={{ marginBottom: 'var(--space-lg)' }}>
-            <h3 style={{ marginBottom: 'var(--space-md)' }}>AI Resume Analyzer</h3>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-md)' }}>
-              Paste your resume or upload a text-based file to get match feedback, ATS keywords, and improvement tips.
-            </p>
-            <div className="form-group">
-              <label className="form-label">Resume Text</label>
-              <textarea
-                className="form-textarea"
-                rows={10}
-                placeholder="Paste your resume here..."
-                value={resumeText}
-                onChange={(e) => setResumeText(e.target.value)}
-              />
-            </div>
-            <input
-              type="file"
-              accept=".txt,.md,.doc,.docx,.pdf"
-              onChange={(e) => handleResumeFile(e.target.files?.[0])}
-              style={{ marginBottom: 'var(--space-md)' }}
+            <ResumeAnalyzerCard
+              title="AI Resume Analyzer"
+              subtitle="Paste your resume and compare it against the most relevant role for a precise ATS and skill-gap analysis."
+              initialResumeText={profile.resumeText || ''}
             />
-            <div>
-              <button type="button" className="btn btn-primary" onClick={analyzeResume} disabled={analyzingResume}>
-                {analyzingResume ? 'Analyzing...' : 'Analyze Resume'}
-              </button>
-            </div>
-
-            {resumeAnalysis?.analysis && (
-              <div style={{ marginTop: 'var(--space-lg)' }}>
-                <div className="badge badge-primary" style={{ marginBottom: 'var(--space-sm)' }}>
-                  Match Score: {resumeAnalysis.analysis.matchPercent}%
-                </div>
-                <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-sm)' }}>
-                  Compared against: <strong>{resumeAnalysis.targetJob?.title}</strong>
-                </p>
-                <div style={{ display: 'grid', gap: 'var(--space-sm)' }}>
-                  <div>
-                    <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '4px' }}>
-                      Missing keywords
-                    </div>
-                    <div className="flex flex-wrap gap-xs">
-                      {(resumeAnalysis.analysis.missingKeywords || []).slice(0, 6).map((keyword) => (
-                        <span key={keyword} className="skill-tag" style={{ background: 'rgba(245,158,11,0.12)', borderColor: 'rgba(245,158,11,0.18)' }}>
-                          {keyword}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '4px' }}>
-                      ATS optimization tips
-                    </div>
-                    <div style={{ color: 'var(--text-secondary)', display: 'grid', gap: '4px', fontSize: '0.9rem' }}>
-                      {(resumeAnalysis.analysis.atsOptimizationTips || []).map((tip) => <div key={tip}>• {tip}</div>)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         </form>
 

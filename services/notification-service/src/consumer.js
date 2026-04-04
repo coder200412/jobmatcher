@@ -16,6 +16,69 @@ async function createNotification(userId, type, title, message, data = {}) {
   console.log(`📧 [EMAIL-MOCK] To: ${userId} | Subject: ${title} | ${message}`);
 }
 
+function getMatchedSkills(candidate, job) {
+  const candidateSkills = Array.isArray(candidate.skills) ? candidate.skills : [];
+  const jobSkills = Array.isArray(job.skills) ? job.skills : [];
+  const candidateSkillSet = new Set(candidateSkills.map((skill) => String(skill).toLowerCase()));
+  return jobSkills.filter((skill) => candidateSkillSet.has(String(skill).toLowerCase()));
+}
+
+function computeCandidateAlertMatch(candidate, job) {
+  const matchedSkills = getMatchedSkills(candidate, job);
+  const jobSkills = Array.isArray(job.skills) ? job.skills : [];
+  const skillScore = jobSkills.length > 0 ? matchedSkills.length / jobSkills.length : 0.55;
+  const experienceScore = Number(candidate.experience_years || 0) >= Number(job.experienceMin || 0) ? 1 : 0.6;
+  const locationScore = (job.workType === 'remote' || !candidate.location || !job.location)
+    ? 0.85
+    : (String(candidate.location).toLowerCase().includes(String(job.location).toLowerCase()) ? 1 : 0.5);
+
+  return Math.round((skillScore * 0.55 + experienceScore * 0.25 + locationScore * 0.2) * 100);
+}
+
+async function buildJobAlertNotifications(payload) {
+  const candidatesResult = await query(
+    `SELECT
+       u.id,
+       u.first_name,
+       u.location,
+       u.experience_years,
+       COALESCE(array_agg(s.skill_name) FILTER (WHERE s.id IS NOT NULL), '{}') AS skills,
+       COALESCE(np.min_match_score, 70) AS min_match_score,
+       COALESCE(np.only_high_priority, false) AS only_high_priority
+     FROM user_service.users u
+     LEFT JOIN user_service.user_skills s ON s.user_id = u.id
+     LEFT JOIN notification_service.notification_preferences np ON np.user_id = u.id
+     WHERE u.role = 'candidate' AND u.is_active = true
+     GROUP BY u.id, np.min_match_score, np.only_high_priority
+     LIMIT 200`
+  );
+
+  const ranked = candidatesResult.rows
+    .map((candidate) => {
+      const matchedSkills = getMatchedSkills(candidate, payload);
+      return {
+        candidate,
+        matchPercent: computeCandidateAlertMatch(candidate, payload),
+        matchedSkills,
+      };
+    })
+    .filter(({ matchedSkills }) => matchedSkills.length > 0)
+    .sort((left, right) => right.matchPercent - left.matchPercent);
+
+  return ranked.map(({ candidate, matchPercent, matchedSkills }) => ({
+    userId: candidate.id,
+    type: 'new_job_match',
+    title: matchPercent >= 85 ? '🔥 High match job alert' : '🎯 New job posted',
+    message: `${payload.title} at ${payload.company} matches your skills: ${matchedSkills.slice(0, 3).join(', ')}.${matchedSkills.length > 3 ? ' +' + (matchedSkills.length - 3) + ' more.' : ''}`,
+    data: {
+      jobId: payload.jobId,
+      matchPercent,
+      priorityScore: payload.priorityScore || 0,
+      matchedSkills,
+    },
+  }));
+}
+
 function scheduleRetry(delayMs = 3000) {
   if (retryTimer) {
     return;
@@ -112,7 +175,23 @@ async function runConsumer() {
               break;
               }
           case EventTypes.JOB_CREATED:
-            console.log(`[NOTIF] New job posted: ${event.payload.title}`);
+            await createNotification(
+              event.payload.recruiterId,
+              'job_update',
+              'Job posted successfully',
+              `Your job "${event.payload.title}" at ${event.payload.company} is now live.`,
+              { jobId: event.payload.jobId, priorityScore: event.payload.priorityScore || 0 }
+            );
+
+            for (const notification of await buildJobAlertNotifications(event.payload)) {
+              await createNotification(
+                notification.userId,
+                notification.type,
+                notification.title,
+                notification.message,
+                notification.data
+              );
+            }
             break;
         }
       } catch (err) {

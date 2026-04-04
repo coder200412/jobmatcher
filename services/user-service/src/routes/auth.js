@@ -24,6 +24,11 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
+const googleAuthSchema = z.object({
+  credential: z.string().min(1),
+  role: z.enum(['candidate', 'recruiter']).optional(),
+});
+
 const verificationSchema = z.object({
   email: z.string().email(),
   token: z.string().regex(/^[a-f0-9]{64}$/i),
@@ -93,6 +98,47 @@ function inferRecruiterVerification(email, role) {
   ]);
 
   return Boolean(domain) && !freeEmailDomains.has(domain);
+}
+
+function splitDisplayName(name = '') {
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0] || 'Google',
+    lastName: parts.slice(1).join(' ') || 'User',
+  };
+}
+
+async function verifyGoogleCredential(credential) {
+  const clientId = process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+
+  if (!clientId) {
+    const error = new Error('Google sign-in is not configured yet.');
+    error.status = 503;
+    throw error;
+  }
+
+  const response = await fetch(
+    `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`
+  );
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const error = new Error(payload.error_description || payload.error || 'Google sign-in could not be verified.');
+    error.status = 401;
+    throw error;
+  }
+
+  const validIssuer =
+    payload.iss === 'accounts.google.com' ||
+    payload.iss === 'https://accounts.google.com';
+
+  if (!validIssuer || payload.aud !== clientId || payload.email_verified !== 'true' || !payload.email || !payload.sub) {
+    const error = new Error('Google sign-in verification failed. Please try again with the same Google account.');
+    error.status = 401;
+    throw error;
+  }
+
+  return payload;
 }
 
 async function publishUserRegistered(user) {
@@ -307,6 +353,94 @@ router.post('/resend-code', async (req, res, next) => {
   }
 });
 
+router.post('/google', async (req, res, next) => {
+  try {
+    const { credential, role = 'candidate' } = googleAuthSchema.parse(req.body);
+    const googleProfile = await verifyGoogleCredential(credential);
+    const email = normalizeEmail(googleProfile.email);
+
+    const existingResult = await query(
+      `SELECT id, email, password_hash, role, first_name, last_name, is_active, avatar_url, google_id
+       FROM user_service.users
+       WHERE email = $1`,
+      [email]
+    );
+
+    let user = existingResult.rows[0];
+    let created = false;
+
+    if (!user) {
+      const derivedName = splitDisplayName(googleProfile.name);
+      const firstName = googleProfile.given_name || derivedName.firstName;
+      const lastName = googleProfile.family_name || derivedName.lastName;
+      const result = await query(
+        `INSERT INTO user_service.users (
+           email, password_hash, role, first_name, last_name, avatar_url, is_active,
+           verified_recruiter, google_id, auth_provider
+         )
+         VALUES ($1, NULL, $2, $3, $4, $5, TRUE, $6, $7, 'google')
+         RETURNING id, email, role, first_name, last_name, is_active, avatar_url`,
+        [
+          email,
+          role,
+          firstName,
+          lastName,
+          googleProfile.picture || null,
+          inferRecruiterVerification(email, role),
+          googleProfile.sub,
+        ]
+      );
+
+      user = result.rows[0];
+      created = true;
+
+      await query('DELETE FROM user_service.verification_codes WHERE email = $1', [email]);
+      await publishUserRegistered(user);
+    } else {
+      if (!user.is_active) {
+        return res.status(403).json({ error: 'Account is deactivated' });
+      }
+
+      if (!user.google_id || !user.avatar_url) {
+        const updated = await query(
+          `UPDATE user_service.users
+           SET google_id = COALESCE(google_id, $1),
+               avatar_url = COALESCE(avatar_url, $2),
+               auth_provider = CASE
+                 WHEN password_hash IS NULL OR password_hash = '' THEN 'google'
+                 ELSE auth_provider
+               END,
+               updated_at = NOW()
+           WHERE id = $3
+           RETURNING id, email, role, first_name, last_name, is_active, avatar_url`,
+          [googleProfile.sub, googleProfile.picture || null, user.id]
+        );
+        user = updated.rows[0];
+      }
+    }
+
+    const tokens = generateTokens(user);
+
+    return res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        avatarUrl: user.avatar_url,
+      },
+      created,
+      ...tokens,
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Validation failed', details: err.issues });
+    }
+    next(err);
+  }
+});
+
 // ── POST /api/auth/login ──────────────────────────────
 router.post('/login', async (req, res, next) => {
   try {
@@ -339,6 +473,10 @@ router.post('/login', async (req, res, next) => {
 
     if (!user.is_active) {
       return res.status(403).json({ error: 'Account is deactivated' });
+    }
+
+    if (!user.password_hash) {
+      return res.status(400).json({ error: 'This account uses Google sign-in. Continue with Google to access it.' });
     }
 
     const isValid = await bcrypt.compare(data.password, user.password_hash);

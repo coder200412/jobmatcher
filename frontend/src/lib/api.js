@@ -17,6 +17,7 @@ const API_BASE = normalizeApiBase(process.env.NEXT_PUBLIC_API_URL);
 const AUTH_PATHS_WITHOUT_REFRESH = [
   '/auth/login',
   '/auth/register',
+  '/auth/google',
   '/auth/verify-email',
   '/auth/resend-code',
   '/auth/refresh',
@@ -162,6 +163,16 @@ class ApiClient {
 
   async login(data) {
     const result = await this.request('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    this.setTokens(result.accessToken, result.refreshToken);
+    localStorage.setItem('user', JSON.stringify(result.user));
+    return result;
+  }
+
+  async googleAuth(data) {
+    const result = await this.request('/auth/google', {
       method: 'POST',
       body: JSON.stringify(data),
     });

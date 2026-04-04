@@ -2,14 +2,20 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import GoogleAuthButton from '@/components/GoogleAuthButton';
 import api from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 
 export default function RegisterPage() {
+  const router = useRouter();
+  const { authenticateWithGoogle } = useAuth();
   const [step, setStep] = useState('register'); // 'register' | 'check-email'
   const [form, setForm] = useState({ email: '', password: '', firstName: '', lastName: '', role: 'candidate' });
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   const handleRegister = async (e) => {
     e.preventDefault();
@@ -40,6 +46,21 @@ export default function RegisterPage() {
     }
   };
 
+  const handleGoogleRegister = async (credential, role) => {
+    setError('');
+    setMessage('');
+    setGoogleLoading(true);
+
+    try {
+      const result = await authenticateWithGoogle(credential, role);
+      router.push(result.user.role === 'recruiter' ? '/recruiter' : '/dashboard');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
   return (
     <div className="auth-page">
       <div className="auth-card" id="register-card">
@@ -57,6 +78,16 @@ export default function RegisterPage() {
                 {error}
               </div>
             )}
+
+            <GoogleAuthButton
+              mode="register"
+              role={form.role}
+              disabled={loading || googleLoading}
+              onSuccess={handleGoogleRegister}
+              onError={(err) => setError(err.message)}
+            />
+
+            <div className="auth-divider">or create an account with email</div>
 
             <form onSubmit={handleRegister}>
               {/* Role Selector */}

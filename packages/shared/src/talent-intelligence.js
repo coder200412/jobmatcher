@@ -151,6 +151,10 @@ function cleanSkillLabel(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function canonicalizeSkill(value) {
   if (!value) return null;
 
@@ -228,6 +232,19 @@ function pickTopKeywords(description = '', skills = []) {
   }
 
   return keywords.slice(0, 8);
+}
+
+function hasPhrase(text, phrase) {
+  const normalizedText = String(text || '').toLowerCase();
+  const normalizedPhrase = String(phrase || '').toLowerCase().trim();
+  if (!normalizedPhrase) return false;
+
+  const pattern = normalizedPhrase
+    .split(/\s+/)
+    .map((part) => escapeRegExp(part))
+    .join('\\s+');
+
+  return new RegExp(`(^|[^a-z0-9+#.-])${pattern}([^a-z0-9+#.-]|$)`, 'i').test(normalizedText);
 }
 
 function classifyDescriptionLine(line) {
@@ -319,13 +336,28 @@ function analyzeJobContent({ title = '', description = '', skills = [], experien
   };
 }
 
-function extractResumeSignals(resumeText = '') {
+function inferResumeExperienceYears(resumeText = '') {
+  const matches = Array.from(String(resumeText || '').matchAll(/(\d{1,2})\+?\s+years?/gi));
+  if (matches.length === 0) return null;
+  return Math.max(...matches.map((match) => Number(match[1] || 0)).filter(Boolean));
+}
+
+function extractResumeSignals(resumeText = '', referenceSkills = [], profileSkills = []) {
   const normalizedText = String(resumeText || '').replace(/\s+/g, ' ').trim();
-  const detectedSkills = normalizeSkillEntries(
-    Array.from(new Set(Object.keys(SKILL_ALIASES)))
-      .filter((alias) => alias.length > 1 && normalizedText.toLowerCase().includes(alias))
-      .map((alias) => SKILL_LIBRARY[canonicalizeSkill(alias)]?.displayName || cleanSkillLabel(alias))
-  );
+  const signalSkills = normalizeSkillEntries([
+    ...referenceSkills,
+    ...profileSkills,
+    ...Object.keys(SKILL_ALIASES).map((alias) => ({ skillName: alias, isRequired: false })),
+    ...Object.keys(SKILL_LIBRARY).map((key) => ({ skillName: SKILL_LIBRARY[key].displayName, isRequired: false })),
+  ]);
+
+  const detectedSkills = signalSkills.filter((skill) => {
+    const aliasVariants = Object.entries(SKILL_ALIASES)
+      .filter(([, canonical]) => canonical === skill.key)
+      .map(([alias]) => alias);
+
+    return [skill.displayName, ...aliasVariants].some((label) => hasPhrase(normalizedText, label));
+  });
 
   const sentences = normalizedText.split(/(?<=[.!?])\s+/).filter(Boolean);
   const achievements = sentences
@@ -336,6 +368,7 @@ function extractResumeSignals(resumeText = '') {
     keywords: pickTopKeywords(normalizedText, detectedSkills),
     detectedSkills,
     achievements,
+    inferredExperienceYears: inferResumeExperienceYears(normalizedText),
   };
 }
 
@@ -361,8 +394,16 @@ function buildAtsTips({ resumeSignals, gapAnalysis, jobInsights }) {
   return tips.slice(0, 4);
 }
 
-function analyzeResumeAgainstJob({ resumeText = '', jobTitle = '', jobDescription = '', jobSkills = [], experienceMin = 0, experienceMax = null }) {
-  const resumeSignals = extractResumeSignals(resumeText);
+function analyzeResumeAgainstJob({
+  resumeText = '',
+  jobTitle = '',
+  jobDescription = '',
+  jobSkills = [],
+  userSkills = [],
+  experienceMin = 0,
+  experienceMax = null,
+}) {
+  const resumeSignals = extractResumeSignals(resumeText, jobSkills, userSkills);
   const jobInsights = analyzeJobContent({
     title: jobTitle,
     description: jobDescription,
@@ -377,16 +418,55 @@ function analyzeResumeAgainstJob({ resumeText = '', jobTitle = '', jobDescriptio
   const keywordCoverage = jobInsights.keywords?.length
     ? jobKeywordMatches.length / jobInsights.keywords.length
     : 0.5;
+  const achievementsScore = resumeSignals.achievements.length > 0 ? Math.min(1, 0.45 + (resumeSignals.achievements.length * 0.15)) : 0.25;
+  const inferredExperienceYears = resumeSignals.inferredExperienceYears;
+  const experienceCoverage = inferredExperienceYears == null
+    ? 0.6
+    : (inferredExperienceYears >= Number(experienceMin || 0) ? 1 : Math.max(0.35, inferredExperienceYears / Math.max(Number(experienceMin || 1), 1)));
 
   const skillScore = gapAnalysis.totalCoveragePercent / 100;
-  const totalScore = Math.round(((skillScore * 0.65) + (keywordCoverage * 0.35)) * 100);
+  const totalScore = Math.round(((skillScore * 0.55) + (keywordCoverage * 0.2) + (achievementsScore * 0.1) + (experienceCoverage * 0.15)) * 100);
+  const summary = gapAnalysis.missingRequiredSkills.length === 0
+    ? `Strong alignment for ${jobTitle}; your resume covers the core required skills.`
+    : `You are close, but you still need clearer evidence for ${gapAnalysis.missingRequiredSkills.slice(0, 2).join(', ')}.`;
+  const strengths = [
+    gapAnalysis.matchedSkills.length > 0 ? `Matched skills: ${gapAnalysis.matchedSkills.slice(0, 3).join(', ')}` : null,
+    resumeSignals.achievements.length > 0 ? 'Resume includes measurable achievement statements.' : null,
+    inferredExperienceYears != null && inferredExperienceYears >= Number(experienceMin || 0)
+      ? `Experience signals meet the role baseline (${inferredExperienceYears}+ years found).`
+      : null,
+  ].filter(Boolean);
+  const improvementPriorities = [
+    ...gapAnalysis.missingRequiredSkills.map((skill) => `Add proof of ${skill} through projects, bullets, or certifications.`),
+    ...(resumeSignals.achievements.length === 0 ? ['Add quantified impact bullets to improve ATS and recruiter confidence.'] : []),
+    ...((jobInsights.keywords || []).filter((keyword) => !jobKeywordMatches.includes(keyword)).slice(0, 2).map((keyword) =>
+      `Use the exact keyword "${keyword}" where it truthfully matches your experience.`
+    )),
+  ].slice(0, 4);
 
   return {
     matchPercent: totalScore,
+    summary,
     matchedKeywords: jobKeywordMatches,
     missingKeywords: (jobInsights.keywords || []).filter((keyword) => !jobKeywordMatches.includes(keyword)),
     matchedSkills: gapAnalysis.matchedSkills,
+    missingRequiredSkills: gapAnalysis.missingRequiredSkills,
+    missingOptionalSkills: gapAnalysis.missingOptionalSkills,
     missingSkills: [...gapAnalysis.missingRequiredSkills, ...gapAnalysis.missingOptionalSkills],
+    requiredCoveragePercent: gapAnalysis.requiredCoveragePercent,
+    scoreBreakdown: {
+      skills: Math.round(skillScore * 100),
+      keywords: Math.round(keywordCoverage * 100),
+      achievements: Math.round(achievementsScore * 100),
+      experience: Math.round(experienceCoverage * 100),
+    },
+    experienceSignal: {
+      inferredYears: inferredExperienceYears,
+      requiredMinimum: experienceMin,
+      fit: inferredExperienceYears == null ? 'unclear' : (inferredExperienceYears >= Number(experienceMin || 0) ? 'meets' : 'below'),
+    },
+    strengths,
+    improvementPriorities,
     atsOptimizationTips: buildAtsTips({ resumeSignals, gapAnalysis, jobInsights }),
     extractedKeywords: resumeSignals.keywords,
     extractedAchievements: resumeSignals.achievements,

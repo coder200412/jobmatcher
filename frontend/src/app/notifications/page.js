@@ -50,7 +50,7 @@ export default function NotificationsPage() {
   };
 
   const typeIcons = {
-    welcome: '🎉', application_update: '📝', new_job_match: '🎯', profile_view: '👁',
+    welcome: '🎉', application_update: '📝', new_job_match: '🎯', job_update: '📢', profile_view: '👁',
   };
 
   return (
@@ -104,6 +104,11 @@ export default function NotificationsPage() {
                     <div className="flex gap-xs" style={{ marginTop: '8px', flexWrap: 'wrap' }}>
                       <span className="badge badge-primary">{n.data.matchPercent}% match</span>
                       {n.data.priorityScore ? <span className="badge badge-neutral">Priority {n.data.priorityScore}</span> : null}
+                      {Array.isArray(n.data.matchedSkills) && n.data.matchedSkills.length > 0 ? (
+                        <span className="badge badge-neutral">
+                          Skills: {n.data.matchedSkills.slice(0, 2).join(', ')}{n.data.matchedSkills.length > 2 ? ` +${n.data.matchedSkills.length - 2}` : ''}
+                        </span>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>

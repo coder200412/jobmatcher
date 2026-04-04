@@ -70,6 +70,12 @@ export function AuthProvider({ children }) {
     return result;
   }, []);
 
+  const authenticateWithGoogle = useCallback(async (credential, role) => {
+    const result = await api.googleAuth({ credential, role });
+    setUser(result.user);
+    return result;
+  }, []);
+
   const register = useCallback(async (data) => {
     const result = await api.register(data);
     if (result.user) {
@@ -92,7 +98,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, updateUser }}>
+    <AuthContext.Provider value={{ user, loading, login, register, authenticateWithGoogle, logout, updateUser }}>
       {children}
     </AuthContext.Provider>
   );

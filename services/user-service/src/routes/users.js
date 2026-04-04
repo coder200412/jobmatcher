@@ -206,7 +206,7 @@ const resumeAnalysisSchema = z.object({
 async function findTargetJob(userId, profile, targetJobId) {
   if (targetJobId) {
     const directJob = await query(
-      `SELECT j.id, j.title, j.description, j.experience_min, j.experience_max,
+      `SELECT j.id, j.title, j.company, j.description, j.experience_min, j.experience_max,
               COALESCE(
                 json_agg(json_build_object('skillName', s.skill_name, 'isRequired', s.is_required))
                 FILTER (WHERE s.id IS NOT NULL),
@@ -224,7 +224,7 @@ async function findTargetJob(userId, profile, targetJobId) {
 
   const targetHint = profile.career_goal || profile.headline || (profile.preferred_roles || [])[0] || '';
   const targetResult = await query(
-    `SELECT j.id, j.title, j.description, j.experience_min, j.experience_max,
+    `SELECT j.id, j.title, j.company, j.description, j.experience_min, j.experience_max,
             COALESCE(
               json_agg(json_build_object('skillName', s.skill_name, 'isRequired', s.is_required))
               FILTER (WHERE s.id IS NOT NULL),
@@ -279,6 +279,7 @@ router.post('/me/resume-analysis', authMiddleware, async (req, res, next) => {
     const analysis = analyzeResumeAgainstJob({
       resumeText,
       jobTitle: targetJob.title,
+      userSkills: profile.skills,
       jobDescription: targetJob.description,
       jobSkills: targetJob.skills,
       experienceMin: targetJob.experience_min,
@@ -299,6 +300,7 @@ router.post('/me/resume-analysis', authMiddleware, async (req, res, next) => {
       targetJob: {
         id: targetJob.id,
         title: targetJob.title,
+        company: targetJob.company,
       },
       analysis,
     });

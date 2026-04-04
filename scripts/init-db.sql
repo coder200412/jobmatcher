@@ -16,7 +16,7 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 CREATE TABLE IF NOT EXISTS user_service.users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255),
     role VARCHAR(20) DEFAULT 'candidate' CHECK (role IN ('candidate', 'recruiter', 'admin')),
     first_name VARCHAR(100),
     last_name VARCHAR(100),
@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS user_service.users (
 );
 
 ALTER TABLE IF EXISTS user_service.users
+ALTER COLUMN password_hash DROP NOT NULL,
 ADD COLUMN IF NOT EXISTS education_school VARCHAR(255),
 ADD COLUMN IF NOT EXISTS current_company VARCHAR(255),
 ADD COLUMN IF NOT EXISTS company_history JSONB DEFAULT '[]'::jsonb,
@@ -41,7 +42,9 @@ ADD COLUMN IF NOT EXISTS interest_tags JSONB DEFAULT '[]'::jsonb,
 ADD COLUMN IF NOT EXISTS resume_text TEXT,
 ADD COLUMN IF NOT EXISTS resume_keywords JSONB DEFAULT '[]'::jsonb,
 ADD COLUMN IF NOT EXISTS last_resume_analysis_at TIMESTAMPTZ,
-ADD COLUMN IF NOT EXISTS verified_recruiter BOOLEAN DEFAULT false;
+ADD COLUMN IF NOT EXISTS verified_recruiter BOOLEAN DEFAULT false,
+ADD COLUMN IF NOT EXISTS google_id VARCHAR(255),
+ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) DEFAULT 'local';
 
 CREATE TABLE IF NOT EXISTS user_service.verification_codes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -72,6 +75,7 @@ CREATE INDEX IF NOT EXISTS idx_users_email ON user_service.users(email);
 CREATE INDEX IF NOT EXISTS idx_users_role ON user_service.users(role);
 CREATE INDEX IF NOT EXISTS idx_users_education_school ON user_service.users(education_school);
 CREATE INDEX IF NOT EXISTS idx_users_current_company ON user_service.users(current_company);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON user_service.users(google_id) WHERE google_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_verification_codes_email ON user_service.verification_codes(email);
 CREATE INDEX IF NOT EXISTS idx_verification_codes_expires_at ON user_service.verification_codes(expires_at);
 CREATE INDEX IF NOT EXISTS idx_user_skills_user_id ON user_service.user_skills(user_id);

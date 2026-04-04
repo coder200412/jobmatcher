@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import GoogleAuthButton from '@/components/GoogleAuthButton';
 import { useAuth } from '@/lib/auth-context';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 export default function LoginPageClient() {
-  const { login } = useAuth();
+  const { login, authenticateWithGoogle } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const verified = searchParams.get('verified');
@@ -17,6 +18,7 @@ export default function LoginPageClient() {
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   useEffect(() => {
     const email = searchParams.get('email') || '';
@@ -36,6 +38,20 @@ export default function LoginPageClient() {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleLogin = async (credential) => {
+    setError('');
+    setGoogleLoading(true);
+
+    try {
+      const result = await authenticateWithGoogle(credential);
+      router.push(result.user.role === 'recruiter' ? '/recruiter' : '/dashboard');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -66,6 +82,15 @@ export default function LoginPageClient() {
           </div>
         )}
 
+        <GoogleAuthButton
+          mode="login"
+          disabled={loading || googleLoading}
+          onSuccess={handleGoogleLogin}
+          onError={(err) => setError(err.message)}
+        />
+
+        <div className="auth-divider">or continue with email</div>
+
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label className="form-label">Email</label>
@@ -82,20 +107,6 @@ export default function LoginPageClient() {
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
-
-        <div className="auth-divider">or</div>
-
-        <div style={{ background: 'var(--bg-glass)', borderRadius: 'var(--radius-md)', padding: 'var(--space-md)', marginBottom: 'var(--space-md)' }}>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 'var(--space-sm)' }}>Demo Accounts (password: password123)</p>
-          <div className="flex flex-wrap gap-xs">
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setForm({ email: 'alice@demo.com', password: 'password123' })}>
-              👩‍💻 Alice (Candidate)
-            </button>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setForm({ email: 'recruiter1@demo.com', password: 'password123' })}>
-              👔 Sarah (Recruiter)
-            </button>
-          </div>
-        </div>
 
         <p style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
           Don&apos;t have an account?{' '}

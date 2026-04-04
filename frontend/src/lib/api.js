@@ -211,11 +211,16 @@ class ApiClient {
   updateJob(id, data) { return this.request(`/jobs/${id}`, { method: 'PUT', body: JSON.stringify(data) }); }
   deleteJob(id) { return this.request(`/jobs/${id}`, { method: 'DELETE' }); }
   getMyJobs() { return this.request('/jobs/recruiter/mine'); }
+  getHiringRounds(jobId) { return this.request(`/jobs/${jobId}/hiring-rounds`); }
+  updateHiringRounds(jobId, rounds) { return this.request(`/jobs/${jobId}/hiring-rounds`, { method: 'PUT', body: JSON.stringify({ rounds }) }); }
 
   // Applications
   applyToJob(jobId, data = {}) { return this.request(`/jobs/${jobId}/apply`, { method: 'POST', body: JSON.stringify(data) }); }
   getMyApplications() { return this.request('/applications/me'); }
   getJobApplications(jobId) { return this.request(`/jobs/${jobId}/applications`); }
+  updateApplicationRound(appId, roundId, data) {
+    return this.request(`/applications/${appId}/rounds/${roundId}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
   updateApplicationStatus(appId, status, note = '') {
     return this.request(`/applications/${appId}/status`, { method: 'PUT', body: JSON.stringify({ status, note }) });
   }

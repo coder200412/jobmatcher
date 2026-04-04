@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import api from '@/lib/api';
 import ApplicationTimeline from '@/components/ApplicationTimeline';
+import ApplicationRoundsTracker from '@/components/ApplicationRoundsTracker';
 
 export default function ApplicationsPage() {
   const [applications, setApplications] = useState([]);
@@ -93,12 +94,53 @@ export default function ApplicationsPage() {
                 </div>
               </div>
 
+              {app.transparency?.roundsSummary?.totalRounds > 0 && (
+                <div style={{
+                  marginTop: 'var(--space-md)',
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                  gap: 'var(--space-sm)',
+                }}>
+                  <div style={{ padding: 'var(--space-sm)', borderRadius: 'var(--radius-md)', background: 'var(--bg-glass)' }}>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Rounds Cleared</div>
+                    <div style={{ fontWeight: 700 }}>{app.transparency.roundsSummary.clearedCount}/{app.transparency.roundsSummary.totalRounds}</div>
+                  </div>
+                  <div style={{ padding: 'var(--space-sm)', borderRadius: 'var(--radius-md)', background: 'var(--bg-glass)' }}>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Current Round</div>
+                    <div style={{ fontWeight: 700 }}>
+                      {app.transparency.roundsSummary.failedRound?.name || app.transparency.roundsSummary.nextPendingRound?.name || 'Completed'}
+                    </div>
+                  </div>
+                  <div style={{ padding: 'var(--space-sm)', borderRadius: 'var(--radius-md)', background: 'var(--bg-glass)' }}>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Round Status</div>
+                    <div style={{ fontWeight: 700 }}>
+                      {app.transparency.roundsSummary.failedCount > 0
+                        ? 'Not cleared'
+                        : app.transparency.roundsSummary.allCleared
+                          ? 'All cleared'
+                          : 'In progress'}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div style={{ marginTop: 'var(--space-md)' }}>
                 <div className="progress-bar">
                   <div className="progress-bar-fill" style={{
                     width: `${app.transparency?.progressPercent || 20}%`
                   }} />
                 </div>
+              </div>
+
+              <div style={{ marginTop: 'var(--space-lg)' }}>
+                <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 'var(--space-sm)' }}>
+                  Recruiter Rounds
+                </div>
+                <ApplicationRoundsTracker
+                  rounds={app.rounds || []}
+                  compact
+                  emptyMessage="The recruiter has not published the interview rounds for this job yet."
+                />
               </div>
 
               <div style={{ marginTop: 'var(--space-lg)' }}>

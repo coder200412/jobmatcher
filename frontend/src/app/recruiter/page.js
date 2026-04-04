@@ -117,6 +117,7 @@ export default function RecruiterDashboard() {
               <tr>
                 <th>Position</th>
                 <th>Company</th>
+                <th>Capacity</th>
                 <th>Status</th>
                 <th>Views</th>
                 <th>Applications</th>
@@ -129,9 +130,15 @@ export default function RecruiterDashboard() {
                 <tr key={job.id}>
                   <td><span style={{ fontWeight: 600 }}>{job.title}</span></td>
                   <td style={{ color: 'var(--text-secondary)' }}>{job.company}</td>
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{job.positionsCount || 1} positions</div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                      {job.positionsRemaining || 0} left
+                    </div>
+                  </td>
                   <td><span className={`badge ${job.status === 'active' ? 'badge-success' : 'badge-neutral'}`}>{job.status}</span></td>
                   <td>{job.viewsCount}</td>
-                  <td><span style={{ fontWeight: 600, color: 'var(--text-accent)' }}>{job.applicationsCount}</span></td>
+                  <td><span style={{ fontWeight: 600, color: 'var(--text-accent)' }}>{job.applicationsCount} / {job.positionsCount || 1}</span></td>
                   <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{new Date(job.createdAt).toLocaleDateString()}</td>
                   <td>
                     <div className="flex gap-xs">
